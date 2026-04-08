@@ -1,0 +1,133 @@
+/**
+ * Guardian Hook — tool.execute.before integration
+ * 
+ * V4.7: Source file edit protection.
+ * 
+ * NOTE: OpenCode plugin hooks do NOT receive agent identity in tool.execute.before.
+ * The input only contains: tool, sessionID, callID.
+ * Agent identity must be inferred from session context or tool usage patterns.
+ */
+
+import type { Hooks } from '@opencode-ai/plugin';
+import { Guardian } from '../../shared/guardian.js';
+import { extractCommandFromArgs } from './utils.js';
+
+let currentAgent: string | undefined = undefined;
+
+export function setSharkAgent(agent: string): void {
+  currentAgent = agent;
+}
+
+export function clearSharkAgent(): void {
+  currentAgent = undefined;
+}
+
+export function createGuardianHook(guardian: Guardian): Hooks['tool.execute.before'] {
+  return async (input, output) => {
+    const { tool } = input;
+    
+    // Only process for shark agent sessions
+    if (currentAgent !== 'shark') {
+      return;
+    }
+    
+    const args = (output as { args: unknown }).args;
+
+    // V4.7: SOURCE FILE EDIT BLOCK - MECHANICAL ENFORCEMENT
+    if (tool === 'edit' && args) {
+      const editArgs = args as { filePath?: string };
+      if (editArgs?.filePath) {
+        const filePath = editArgs.filePath;
+        const editCheck = guardian.canEdit(filePath);
+        
+        if (!editCheck.allowed) {
+          const copyPath = `${filePath}.v1.0.0`;
+          const errorMsg = `
+╔══════════════════════════════════════════════════════════════════╗
+║  [GUARDIAN] SOURCE FILE EDIT BLOCKED                        ║
+╠══════════════════════════════════════════════════════════════════╣
+║  File: ${filePath}
+║  Reason: SOURCE_FILE_NO_EDIT_HISTORY
+║                                                                  ║
+║  This is a SOURCE FILE that was NOT created in this session   ║
+║  and has NOT been edited yet. You CANNOT edit it directly.    ║
+║                                                                  ║
+║  GRACE PERIOD: Newly created files can be edited for 60 min   ║
+║                                                                  ║
+║  DO NOT: read file, then edit                                 ║
+║  DO NOT: retry the edit                                       ║
+║                                                                  ║
+║  REQUIRED WORKFLOW:                                            ║
+║  1. TERMINAL: cp ${filePath} ${copyPath}                      ║
+║  2. EDIT: edit filePath=${copyPath}                           ║
+║  3. VERIFY: confirm changes work                              ║
+║  4. OPTIONAL: replace original if verified                    ║
+║                                                                  ║
+║  Example commands:                                              ║
+║  terminal command="cp ${filePath} ${copyPath}"                  ║
+║  edit filePath=${copyPath} oldString="..." newString="..."      ║
+╚══════════════════════════════════════════════════════════════════╝`;
+
+          console.error(errorMsg);
+          throw new Error(`[GUARDIAN] SOURCE_FILE_EDIT_BLOCKED: Do NOT retry. Use terminal+edit workflow on the COPY instead.`);
+        }
+      }
+    }
+
+    // Only check tools that execute commands or write files
+    const watchedTools = [
+      'terminal', 'mcp_terminal',
+      'write_file', 'mcp_write_file',
+      'patch', 'mcp_patch'
+    ];
+
+    if (!watchedTools.includes(tool)) {
+      return;
+    }
+
+    // Check for dangerous commands (terminal tools)
+    if (tool === 'terminal' || tool === 'mcp_terminal') {
+      const command = extractCommandFromArgs(args);
+      if (command && guardian.isDangerousCommand(command)) {
+        const truncated = command.slice(0, 80);
+        console.error(`[Shark Guardian] DANGEROUS command detected: ${truncated}...`);
+        console.error(`[Shark Guardian] MECHANICAL BLOCK: Cannot execute dangerous commands.`);
+        throw new Error(`[GUARDIAN] DANGEROUS_COMMAND_BLOCKED: ${command.slice(0, 50)}...`);
+      }
+      
+      if (command) {
+        const modifyCheck = guardian.canModifyFile(command);
+        if (!modifyCheck.allowed) {
+          const errorMsg = `
+╔══════════════════════════════════════════════════════════════════╗
+║  [GUARDIAN] SOURCE FILE MODIFY BLOCKED                      ║
+╠══════════════════════════════════════════════════════════════════╣
+║  Command would modify: ${modifyCheck.filePath}
+║  Reason: ${modifyCheck.reason}
+║                                                                  ║
+║  This is a SOURCE FILE - it cannot be modified via bash.     ║
+║                                                                  ║
+║  REQUIRED WORKFLOW:                                            ║
+║  1. TERMINAL: cp ${modifyCheck.filePath} ${modifyCheck.filePath}.v1.0.0
+║  2. EDIT: edit filePath=${modifyCheck.filePath}.v1.0.0        ║
+║  3. VERIFY: confirm changes work                              ║
+╚══════════════════════════════════════════════════════════════════╝`;
+          console.error(errorMsg);
+          throw new Error(`[GUARDIAN] SOURCE_FILE_MODIFY_BLOCKED: Use edit tool on copy instead.`);
+        }
+      }
+    }
+
+    // Check path-based write permissions (advisory only for non-edit tools)
+    if (tool.includes('write_file') || tool.includes('patch')) {
+      const a = args as Record<string, unknown>;
+      const writePath = (a.path as string) || null;
+      if (writePath && !guardian.canWrite(writePath)) {
+        const zone = guardian.classifyZone(writePath);
+        console.warn(`[Shark Guardian] ADVISORY: Write to ${zone} zone: ${writePath}`);
+      }
+    }
+
+    return;
+  };
+}
