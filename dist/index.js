@@ -15280,7 +15280,7 @@ function checkTheatricalVerification(command) {
   }
   for (const pattern of THEATRICAL_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(`[ANTI-SLOP L1] Counting theater detected: "${command}". ` + `Verification requires running, not counting.`);
+      throw new Error(`[L1 BLOCKED] Counting theater: ${command}`);
     }
   }
 }
@@ -15289,7 +15289,7 @@ function checkFakeTestRunner(command) {
     return;
   for (const pattern of FAKE_TEST_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(`[ANTI-SLOP L2] Fake test runner detected: "${command}". ` + `Tests must run via OpenCode hooks. Use: opencode run "shark-test-runner"`);
+      throw new Error(`[L2 BLOCKED] Fake test runner: ${command}`);
     }
   }
 }
@@ -15298,7 +15298,7 @@ function checkSourceInspection(command) {
     return;
   for (const pattern of SOURCE_INSPECTION_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(`[ANTI-SLOP L3] Source inspection detected. ` + `File existence \u2260 runtime proof. Use container test instead.`);
+      throw new Error(`[L3 BLOCKED] Source inspection: ${command}`);
     }
   }
 }
@@ -15307,13 +15307,13 @@ function checkWrongContainer(command) {
     return;
   for (const pattern of WRONG_CONTAINER_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(`[ANTI-SLOP L4] Wrong container command. ` + `Use: docker run --rm -v "$HOME/.config/opencode:/root/.config/opencode" opencode-test:1.4.3 ...`);
+      throw new Error(`[L4 BLOCKED] Wrong container: ${command}`);
     }
   }
 }
 function checkCrossAgentTools(tool6) {
   if (CROSS_AGENT_TOOLS.has(tool6)) {
-    throw new Error(`[ANTI-DERAILMENT L5.7] Cross-agent tool blocked. ` + `Tool: ${tool6}. Cannot invoke other agent tools directly.`);
+    throw new Error(`[L5.7 BLOCKED] Cross-agent tool: ${tool6}`);
   }
 }
 function createGuardianHook(guardian) {
@@ -15333,7 +15333,7 @@ function createGuardianHook(guardian) {
         checkFakeTestRunner(command);
       }
       if (currentAgent && currentAgent !== "shark" && !currentAgent.startsWith("shark_")) {
-        throw new Error(`[BRAIN_FAILURE_BLOCK] Cannot execute "${tool6}" when system brain is uninitialized. ` + `Brain state: ${currentAgent || "undefined"}. Required: shark.`);
+        throw new Error(`[L0 BLOCKED] Brain uninitialized for: ${tool6}`);
       }
     }
     checkCrossAgentTools(tool6);
@@ -15345,7 +15345,7 @@ function createGuardianHook(guardian) {
         const filePath = editArgs.filePath;
         const editCheck = guardian.canEdit(filePath);
         if (!editCheck.allowed) {
-          throw new Error(`[GUARDIAN] SOURCE_FILE_EDIT_BLOCKED: ${filePath} \u2014 Use: terminal command="cp ${filePath} ${filePath}.v1.0.0" then edit the COPY`);
+          throw new Error(`[GUARDIAN] Edit blocked: ${filePath}`);
         }
         guardian.registerEdit(filePath);
       }
@@ -15609,118 +15609,111 @@ function extractAgentText(output) {
 }
 function checkHostFallback(text) {
   for (const pattern of HOST_FALLBACK_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.1] Host fallback detected. ` + `Host testing \u2260 container testing. Container isolation is REQUIRED for ship gate.`);
-    }
+    if (pattern.test(text))
+      return true;
   }
+  return false;
 }
 function checkSuccessClaim(text) {
   for (const pattern of SUCCESS_CLAIM_PATTERNS) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) {
-        throw new Error(`[ANTI-DERAILMENT L5.2] Success claim without proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). ` + `Run: opencode run "shark-test-runner" --agent shark`);
-      }
+      if (!hasContainerTestEvidence())
+        return true;
     }
   }
+  return false;
 }
 function checkModelRestriction(text) {
   for (const pattern of MODEL_RESTRICTION_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.3] Model restriction excuse detected. ` + `Quality gates apply regardless of model choice.`);
-    }
+    if (pattern.test(text))
+      return true;
   }
+  return false;
 }
 function checkMockStub(text) {
   for (const pattern of MOCK_STUB_PATTERNS) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) {
-        throw new Error(`[ANTI-DERAILMENT L5.4] Mock/stub data detected. ` + `MECHANICAL PROOF REQUIRED: Container test evidence. ` + `Real data + real execution required for ship gate.`);
-      }
+      if (!hasContainerTestEvidence())
+        return true;
     }
   }
+  return false;
 }
 function checkSimplification(text) {
   for (const pattern of SIMPLIFICATION_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.5] Oversimplification detected. ` + `Nuance matters. Do not hand-wave complex aspects.`);
-    }
+    if (pattern.test(text))
+      return true;
   }
+  return false;
 }
 function checkConfusionPretense(text) {
   for (const pattern of CONFUSION_PRETENSE_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.6] Confusion pretense detected. ` + `If uncertain, admit it. "Somewhat works" is not an acceptable status.`);
-    }
+    if (pattern.test(text))
+      return true;
   }
+  return false;
 }
 function checkScopeCreep(text) {
   for (const pattern of SCOPE_CREEP_PATTERNS) {
     if (pattern.test(text)) {
-      let isCrossAgent = false;
       for (const cap of CROSS_AGENT_PATTERNS) {
-        if (cap.test(text)) {
-          isCrossAgent = true;
-          break;
-        }
+        if (cap.test(text))
+          return true;
       }
-      if (isCrossAgent) {
-        const toolMatch = text.match(/(hermes|hive|kraken|mem|knowledge)_[a-z_]+/i);
-        throw new Error(`[ANTI-DERAILMENT L5.7] CROSS-AGENT TOOL BLOCKED. ` + `Tool: ${toolMatch ? toolMatch[0] : "unknown"}. ` + `Cannot use tools from other agents (hermes, hive, kraken, etc).`);
-      }
-      throw new Error(`[ANTI-DERAILMENT L5.7] Scope creep detected. ` + `Stay on task. Use separate task for new items.`);
+      return true;
     }
   }
+  return false;
 }
 function checkUndermining(text) {
   for (const pattern of UNDERMINING_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.8] Undermining detected. ` + `Quality gates exist for reason. Do not use "not worth it" excuses.`);
-    }
+    if (pattern.test(text))
+      return true;
   }
+  return false;
 }
 function checkImpatience(text) {
   for (const pattern of IMPATIENCE_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.9] Impatience detected. ` + `Proper verification takes time. Do not skip required steps.`);
-    }
+    if (pattern.test(text))
+      return true;
   }
+  return false;
 }
 function checkSelfReference(text) {
   for (const pattern of SELF_REFERENCE_PATTERNS) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) {
-        throw new Error(`[ANTI-DERAILMENT L5.10] Self-reference claim without proof. ` + `Self-verification \u2260 mechanical proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence.`);
-      }
+      if (!hasContainerTestEvidence())
+        return true;
     }
   }
+  return false;
 }
-function checkCombinedText(text) {
-  checkHostFallback(text);
-  checkSuccessClaim(text);
-  checkModelRestriction(text);
-  checkMockStub(text);
-  checkSimplification(text);
-  checkConfusionPretense(text);
-  checkScopeCreep(text);
-  checkUndermining(text);
-  checkImpatience(text);
-  checkSelfReference(text);
+function foundSlop(text) {
+  return checkHostFallback(text) || checkSuccessClaim(text) || checkModelRestriction(text) || checkMockStub(text) || checkSimplification(text) || checkConfusionPretense(text) || checkScopeCreep(text) || checkUndermining(text) || checkImpatience(text) || checkSelfReference(text);
 }
 function createMessagesTransformHook() {
   return async (input, output) => {
     try {
       const { agentText, agent } = extractAgentText(output);
-      if (!agent || !isSharkAgent(agent)) {
+      if (!agent || !isSharkAgent(agent))
         return;
-      }
       setCurrentAgent(agent);
-      if (!agentText || agentText.trim().length === 0) {
+      if (!agentText || agentText.trim().length === 0)
         return;
+      if (foundSlop(agentText)) {
+        const msgs = output?.messages;
+        if (msgs) {
+          for (const msg of msgs) {
+            if (msg?.info?.role === "assistant" && msg?.parts) {
+              for (const part of msg.parts) {
+                if (part?.type === "text")
+                  part.text = "";
+              }
+            }
+          }
+        }
       }
-      checkCombinedText(agentText);
-    } catch (error49) {
-      throw error49;
-    }
+    } catch (error49) {}
   };
 }
 
@@ -16298,7 +16291,6 @@ function injectBuildContext() {
       const context = fs9.readFileSync(contextPath, "utf-8");
       const reminderPath = path8.join(sharkDir, BUILD_REMINDER_FILE);
       const reminder = fs9.existsSync(reminderPath) ? fs9.readFileSync(reminderPath, "utf-8") : "L1-L4 broken. L5 working.";
-      console.log(`[SHARK] Build context injected: ${reminder}`);
     }
   } catch (err) {}
 }

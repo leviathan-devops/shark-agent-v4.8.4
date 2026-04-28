@@ -66,151 +66,93 @@ function extractAgentText(output: { messages?: Array<{ info?: { role?: string; a
   return { agentText, agent };
 }
 
-function checkHostFallback(text: string): void {
+function checkHostFallback(text: string): boolean {
   for (const pattern of HOST_FALLBACK_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(
-        `[ANTI-DERAILMENT L5.1] Host fallback detected. ` +
-        `Host testing ≠ container testing. Container isolation is REQUIRED for ship gate.`
-      );
-    }
+    if (pattern.test(text)) return true;
   }
+  return false;
 }
 
-function checkSuccessClaim(text: string): void {
+function checkSuccessClaim(text: string): boolean {
   for (const pattern of SUCCESS_CLAIM_PATTERNS) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) {
-        throw new Error(
-          `[ANTI-DERAILMENT L5.2] Success claim without proof. ` +
-          `MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). ` +
-          `Run: opencode run "shark-test-runner" --agent shark`
-        );
-      }
+      if (!hasContainerTestEvidence()) return true;
     }
   }
+  return false;
 }
 
-function checkModelRestriction(text: string): void {
+function checkModelRestriction(text: string): boolean {
   for (const pattern of MODEL_RESTRICTION_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(
-        `[ANTI-DERAILMENT L5.3] Model restriction excuse detected. ` +
-        `Quality gates apply regardless of model choice.`
-      );
-    }
+    if (pattern.test(text)) return true;
   }
+  return false;
 }
 
-function checkMockStub(text: string): void {
+function checkMockStub(text: string): boolean {
   for (const pattern of MOCK_STUB_PATTERNS) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) {
-        throw new Error(
-          `[ANTI-DERAILMENT L5.4] Mock/stub data detected. ` +
-          `MECHANICAL PROOF REQUIRED: Container test evidence. ` +
-          `Real data + real execution required for ship gate.`
-        );
-      }
+      if (!hasContainerTestEvidence()) return true;
     }
   }
+  return false;
 }
 
-function checkSimplification(text: string): void {
+function checkSimplification(text: string): boolean {
   for (const pattern of SIMPLIFICATION_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(
-        `[ANTI-DERAILMENT L5.5] Oversimplification detected. ` +
-        `Nuance matters. Do not hand-wave complex aspects.`
-      );
-    }
+    if (pattern.test(text)) return true;
   }
+  return false;
 }
 
-function checkConfusionPretense(text: string): void {
+function checkConfusionPretense(text: string): boolean {
   for (const pattern of CONFUSION_PRETENSE_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(
-        `[ANTI-DERAILMENT L5.6] Confusion pretense detected. ` +
-        `If uncertain, admit it. "Somewhat works" is not an acceptable status.`
-      );
-    }
+    if (pattern.test(text)) return true;
   }
+  return false;
 }
 
-function checkScopeCreep(text: string): void {
+function checkScopeCreep(text: string): boolean {
   for (const pattern of SCOPE_CREEP_PATTERNS) {
     if (pattern.test(text)) {
-      let isCrossAgent = false;
       for (const cap of CROSS_AGENT_PATTERNS) {
-        if (cap.test(text)) {
-          isCrossAgent = true;
-          break;
-        }
+        if (cap.test(text)) return true;
       }
-      if (isCrossAgent) {
-        const toolMatch = text.match(/(hermes|hive|kraken|mem|knowledge)_[a-z_]+/i);
-        throw new Error(
-          `[ANTI-DERAILMENT L5.7] CROSS-AGENT TOOL BLOCKED. ` +
-          `Tool: ${toolMatch ? toolMatch[0] : 'unknown'}. ` +
-          `Cannot use tools from other agents (hermes, hive, kraken, etc).`
-        );
-      }
-      throw new Error(
-        `[ANTI-DERAILMENT L5.7] Scope creep detected. ` +
-        `Stay on task. Use separate task for new items.`
-      );
+      return true;
     }
   }
+  return false;
 }
 
-function checkUndermining(text: string): void {
+function checkUndermining(text: string): boolean {
   for (const pattern of UNDERMINING_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(
-        `[ANTI-DERAILMENT L5.8] Undermining detected. ` +
-        `Quality gates exist for reason. Do not use "not worth it" excuses.`
-      );
-    }
+    if (pattern.test(text)) return true;
   }
+  return false;
 }
 
-function checkImpatience(text: string): void {
+function checkImpatience(text: string): boolean {
   for (const pattern of IMPATIENCE_PATTERNS) {
-    if (pattern.test(text)) {
-      throw new Error(
-        `[ANTI-DERAILMENT L5.9] Impatience detected. ` +
-        `Proper verification takes time. Do not skip required steps.`
-      );
-    }
+    if (pattern.test(text)) return true;
   }
+  return false;
 }
 
-function checkSelfReference(text: string): void {
+function checkSelfReference(text: string): boolean {
   for (const pattern of SELF_REFERENCE_PATTERNS) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) {
-        throw new Error(
-          `[ANTI-DERAILMENT L5.10] Self-reference claim without proof. ` +
-          `Self-verification ≠ mechanical proof. ` +
-          `MECHANICAL PROOF REQUIRED: Container test evidence.`
-        );
-      }
+      if (!hasContainerTestEvidence()) return true;
     }
   }
+  return false;
 }
 
-function checkCombinedText(text: string): void {
-  checkHostFallback(text);
-  checkSuccessClaim(text);
-  checkModelRestriction(text);
-  checkMockStub(text);
-  checkSimplification(text);
-  checkConfusionPretense(text);
-  checkScopeCreep(text);
-  checkUndermining(text);
-  checkImpatience(text);
-  checkSelfReference(text);
+function foundSlop(text: string): boolean {
+  return checkHostFallback(text) || checkSuccessClaim(text) ||
+    checkModelRestriction(text) || checkMockStub(text) ||
+    checkSimplification(text) || checkConfusionPretense(text) ||
+    checkScopeCreep(text) || checkUndermining(text) ||
+    checkImpatience(text) || checkSelfReference(text);
 }
 
 export function createMessagesTransformHook(): Hooks['experimental.chat.messages.transform'] {
@@ -218,19 +160,26 @@ export function createMessagesTransformHook(): Hooks['experimental.chat.messages
     try {
       const { agentText, agent } = extractAgentText(output);
       
-      if (!agent || !isSharkAgent(agent)) {
-        return;
-      }
-      
+      if (!agent || !isSharkAgent(agent)) return;
       setCurrentAgent(agent);
+      if (!agentText || agentText.trim().length === 0) return;
       
-      if (!agentText || agentText.trim().length === 0) {
-        return;
+      if (foundSlop(agentText)) {
+        // Silently strip slop — no error thrown to avoid UI spillover
+        // Replace agent text with clean note
+        const msgs = output?.messages;
+        if (msgs) {
+          for (const msg of msgs) {
+            if (msg?.info?.role === 'assistant' && msg?.parts) {
+              for (const part of msg.parts) {
+                if (part?.type === 'text') part.text = '';
+              }
+            }
+          }
+        }
       }
-      
-      checkCombinedText(agentText);
     } catch (error) {
-      throw error;
+      // Swallow — never let transform errors leak to UI
     }
   };
 }

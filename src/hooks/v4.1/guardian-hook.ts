@@ -105,10 +105,7 @@ function checkTheatricalVerification(command: string | null): void {
   
   for (const pattern of THEATRICAL_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(
-        `[ANTI-SLOP L1] Counting theater detected: "${command}". ` +
-        `Verification requires running, not counting.`
-      );
+      throw new Error(`[L1 BLOCKED] Counting theater: ${command}`);
     }
   }
 }
@@ -118,10 +115,7 @@ function checkFakeTestRunner(command: string | null): void {
   
   for (const pattern of FAKE_TEST_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(
-        `[ANTI-SLOP L2] Fake test runner detected: "${command}". ` +
-        `Tests must run via OpenCode hooks. Use: opencode run "shark-test-runner"`
-      );
+      throw new Error(`[L2 BLOCKED] Fake test runner: ${command}`);
     }
   }
 }
@@ -131,10 +125,7 @@ function checkSourceInspection(command: string | null): void {
   
   for (const pattern of SOURCE_INSPECTION_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(
-        `[ANTI-SLOP L3] Source inspection detected. ` +
-        `File existence ≠ runtime proof. Use container test instead.`
-      );
+      throw new Error(`[L3 BLOCKED] Source inspection: ${command}`);
     }
   }
 }
@@ -144,20 +135,14 @@ function checkWrongContainer(command: string | null): void {
   
   for (const pattern of WRONG_CONTAINER_PATTERNS) {
     if (pattern.test(command)) {
-      throw new Error(
-        `[ANTI-SLOP L4] Wrong container command. ` +
-        `Use: docker run --rm -v "$HOME/.config/opencode:/root/.config/opencode" opencode-test:1.4.3 ...`
-      );
+      throw new Error(`[L4 BLOCKED] Wrong container: ${command}`);
     }
   }
 }
 
 function checkCrossAgentTools(tool: string): void {
   if (CROSS_AGENT_TOOLS.has(tool)) {
-    throw new Error(
-      `[ANTI-DERAILMENT L5.7] Cross-agent tool blocked. ` +
-      `Tool: ${tool}. Cannot invoke other agent tools directly.`
-    );
+    throw new Error(`[L5.7 BLOCKED] Cross-agent tool: ${tool}`);
   }
 }
 
@@ -193,10 +178,7 @@ export function createGuardianHook(guardian: Guardian): Hooks['tool.execute.befo
 
       // Only block for non-shark agents when we KNOW the agent identity
       if (currentAgent && currentAgent !== 'shark' && !currentAgent.startsWith('shark_')) {
-        throw new Error(
-          `[BRAIN_FAILURE_BLOCK] Cannot execute "${tool}" when system brain is uninitialized. ` +
-          `Brain state: ${currentAgent || 'undefined'}. Required: shark.`
-        );
+        throw new Error(`[L0 BLOCKED] Brain uninitialized for: ${tool}`);
       }
     }
     
@@ -217,7 +199,7 @@ export function createGuardianHook(guardian: Guardian): Hooks['tool.execute.befo
         const editCheck = guardian.canEdit(filePath);
         
         if (!editCheck.allowed) {
-          throw new Error(`[GUARDIAN] SOURCE_FILE_EDIT_BLOCKED: ${filePath} — Use: terminal command="cp ${filePath} ${filePath}.v1.0.0" then edit the COPY`);
+          throw new Error(`[GUARDIAN] Edit blocked: ${filePath}`);
         }
         
         guardian.registerEdit(filePath);

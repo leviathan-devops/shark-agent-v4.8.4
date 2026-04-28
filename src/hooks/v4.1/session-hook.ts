@@ -81,7 +81,7 @@ function injectBuildContext(): void {
         ? fs.readFileSync(reminderPath, 'utf-8')
         : 'L1-L4 broken. L5 working.';
       
-      console.log(`[SHARK] Build context injected: ${reminder}`);
+      // Build context silently injected
     }
   } catch (err) {
     // Silent fail - don't disrupt session
