@@ -1,0 +1,9 @@
+node_modules/
+.cache/
+*.log
+.DS_Store
+dist/*.map
+.env
+*.tar.gz
+.sass-cache/
+*.tsbuildinfo
