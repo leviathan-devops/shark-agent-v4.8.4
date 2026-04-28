@@ -141,3 +141,36 @@ export const DANGEROUS_TOOLS = new Set([
 ]);
 
 export const CONTAINER_TEST_RESULT_FILE = 'ContainerTestResult.json';
+
+// ============================================================================
+// L8: BEHAVIORAL INTELLIGENCE SIGNATURES
+// ============================================================================
+export const BEHAVIORAL_PATTERNS: Array<{ label: string; pattern: RegExp; requireEvidence?: boolean }> = [
+  { label: 'Confused avoidance', pattern: /i('?m| am) confused about (the )?(goal|task|purpose|direction)/i },
+  { label: 'Already works claim', pattern: /(host|local).*(already|proves).*(works|correct)/i },
+  { label: 'Simplify excuse', pattern: /(maybe|perhaps).*simplif/i },
+  { label: 'Goal reset', pattern: /what was the (user.?s |original )?goal/i },
+  { label: 'Basic solution shortcut', pattern: /(just|simply) use .*(instead|rather)/i },
+  { label: 'Self-assessment claim', pattern: /in my (assessment|experience|analysis)/i, requireEvidence: true },
+  { label: 'Scope expansion', pattern: /(while|whilst).*(at it|we.?re at it|also)|should also (fix|add|do)/i },
+  { label: 'False fix claim', pattern: /(should be |is )?fixed now|should (be |)working now/i },
+  { label: 'Superficial check', pattern: /let me (just )?(check|verify|confirm) (real )?quick/i },
+  { label: 'Trust me deflection', pattern: /trust me|i promise|believe me|it.?ll be fine/i, requireEvidence: true },
+  { label: 'Task avoidance', pattern: /(maybe|perhaps|let.?s).*(come back|revisit|later|another time)/i },
+  { label: 'Overthinking stall', pattern: /(hmm|um|uh).*(thinking|wonder|ponder)/i },
+  { label: 'Derail: reading sensitive', pattern: /read(ing)? .*(ssh|key|credential|secret|token|passwd|shadow|\.env|auth)/i },
+  { label: 'Derail: exploring system', pattern: /let me (explore|check|look at|see).*(system|root|other|different|whole)/i },
+  { label: 'Derail: data exfil', pattern: /(dump|print|output|show) (full|entire|all|complete).*(key|secret|credential|config)/i },
+];
+
+// ============================================================================
+// L7: VERIFICATION GATE PATTERNS — agent must not claim verification without proof
+// ============================================================================
+export const VERIFICATION_PATTERNS = [
+  /verified( by|\.| and|$)/i,
+  /confirmed working/i,
+  /tested (and|&) (works|passes|verified)/i,
+  /all tests pass(ed|ing)?/i,
+  /ready to ship/i,
+  /proven (to work|working|correct)/i,
+];

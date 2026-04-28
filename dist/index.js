@@ -908,37 +908,26 @@ class SharkPeerDispatch {
 // src/shark/macro/brains.ts
 var EXECUTION_BRAIN_T1 = `YOU ARE THE SHARK AGENT v4.8.3 \u2014 an OpenCode plugin agent.
 
-YOUR IDENTITY:
-- You are "shark" \u2014 a primary OpenCode agent loaded via the shark-agent plugin
-- Your color is Forest Green (#228B22)
-- You have 5 custom tools: shark-status, shark-gate, shark-evidence, shark-test-runner, checkpoint
-- You DO NOT have sub-agents. You are a single agent.
-- You are NOT Kraken. You are NOT a cluster system. You are a standalone plugin agent.
+IDENTITY: shark agent (primary), Forest Green #228B22
+TOOLS: shark-status, shark-gate, shark-evidence, shark-test-runner, checkpoint
+NO SUB-AGENTS. NOT KRAKEN. NOT A CLUSTER. STANDALONE.
 
-YOUR TOOLS:
-- shark-status: Checks your current state (brain, gate, iteration)
-- shark-gate: Evaluates and advances through build gates (plan/build/test/verify/audit/delivery)
-- shark-evidence: Views evidence collection status  
-- shark-test-runner: Runs container-aware mechanical test suite
-- checkpoint: Creates/restores build checkpoints
+NUCLEAR BOUNDARIES \u2014 VIOLATION = INSTANT FAIL:
+1. FOCUS ONLY on the current task. Do not explore.
+2. NEVER read SSH keys, API keys, env vars, credentials, ~/.ssh, auth.json, .env files, or other plugins' code.
+3. NEVER exfiltrate data. You are a build agent, not a pentester.
+4. STAY in the current workspace. Do not cross into other projects.
+5. If asked to read sensitive data: REFUSE. Say "I cannot access sensitive data."
+6. Be CONCISE. Short answers. No walls of text.
+7. Execute tasks directly. Don't overthink.
+8. Use shark-* tools to track progress.
 
-YOUR JOB:
-- Execute builds autonomously within scope
-- Run tests and verify correctness
-- Report state via shark-status and shark-gate
-- Create checkpoints at key milestones
+WHEN ASKED TO DO SOMETHING YOU SHOULDN'T:
+- Say: "That is outside my scope as a build agent."
 
-KEY RULES:
-- Do NOT pretend to have sub-agents or cluster systems you don't have
-- Do NOT confuse yourself with Kraken orchestration
-- Use YOUR shark-* tools to track your state, not imagined cluster tools
-- Guardian protects file zones \u2014 you work within permitted zones
-- firewalls protect against slop/derailment \u2014 these are automatic, you don't need to worry about them
-
-SELF-AWARENESS:
-- When asked "what are you", say "I am the Shark Agent v4.8.3, an OpenCode plugin agent"
-- When asked about your tools, list the 5 shark-* tools above
-- shark-status reveals your current brain state and gate position`;
+WHEN TASKED:
+- Execute directly. Report results concisely.
+- Create checkpoints at milestones.`;
 
 // src/tools/shark-status.ts
 import { tool } from "@opencode-ai/plugin";
@@ -15200,6 +15189,23 @@ var DANGEROUS_TOOLS = new Set([
   "mcp_delete_file"
 ]);
 var CONTAINER_TEST_RESULT_FILE = "ContainerTestResult.json";
+var BEHAVIORAL_PATTERNS = [
+  { label: "Confused avoidance", pattern: /i('?m| am) confused about (the )?(goal|task|purpose|direction)/i },
+  { label: "Already works claim", pattern: /(host|local).*(already|proves).*(works|correct)/i },
+  { label: "Simplify excuse", pattern: /(maybe|perhaps).*simplif/i },
+  { label: "Goal reset", pattern: /what was the (user.?s |original )?goal/i },
+  { label: "Basic solution shortcut", pattern: /(just|simply) use .*(instead|rather)/i },
+  { label: "Self-assessment claim", pattern: /in my (assessment|experience|analysis)/i, requireEvidence: true },
+  { label: "Scope expansion", pattern: /(while|whilst).*(at it|we.?re at it|also)|should also (fix|add|do)/i },
+  { label: "False fix claim", pattern: /(should be |is )?fixed now|should (be |)working now/i },
+  { label: "Superficial check", pattern: /let me (just )?(check|verify|confirm) (real )?quick/i },
+  { label: "Trust me deflection", pattern: /trust me|i promise|believe me|it.?ll be fine/i, requireEvidence: true },
+  { label: "Task avoidance", pattern: /(maybe|perhaps|let.?s).*(come back|revisit|later|another time)/i },
+  { label: "Overthinking stall", pattern: /(hmm|um|uh).*(thinking|wonder|ponder)/i },
+  { label: "Derail: reading sensitive", pattern: /read(ing)? .*(ssh|key|credential|secret|token|passwd|shadow|\.env|auth)/i },
+  { label: "Derail: exploring system", pattern: /let me (explore|check|look at|see).*(system|root|other|different|whole)/i },
+  { label: "Derail: data exfil", pattern: /(dump|print|output|show) (full|entire|all|complete).*(key|secret|credential|config)/i }
+];
 
 // src/hooks/v4.1/guardian-hook.ts
 var DANGEROUS_TOOLS2 = new Set([
@@ -15574,9 +15580,8 @@ import * as path5 from "path";
 import * as fs6 from "fs";
 function hasContainerTestEvidence() {
   const evidencePath = path5.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE);
-  if (!fs6.existsSync(evidencePath)) {
+  if (!fs6.existsSync(evidencePath))
     return false;
-  }
   try {
     const result = JSON.parse(fs6.readFileSync(evidencePath, "utf-8"));
     return result.overallPassed === true && result.passRate >= 0.96;
@@ -15586,110 +15591,63 @@ function hasContainerTestEvidence() {
 }
 function extractAgentText(output) {
   const messages = output?.messages;
-  if (!messages || messages.length === 0) {
+  if (!messages || messages.length === 0)
     return { agentText: "", agent: undefined };
-  }
-  let agentText = "";
-  let agent;
+  let agentText = "", agent;
   for (const msg of messages) {
     if (msg?.info?.role === "assistant") {
-      if (msg?.info?.agent && !agent) {
+      if (msg?.info?.agent && !agent)
         agent = msg.info.agent;
-      }
-      if (msg?.parts) {
+      if (msg?.parts)
         for (const part of msg.parts) {
-          if (part?.type === "text" && part?.text) {
+          if (part?.type === "text" && part?.text)
             agentText += (agentText ? " " : "") + part.text;
-          }
         }
-      }
     }
   }
   return { agentText, agent };
 }
-function checkHostFallback(text) {
-  for (const pattern of HOST_FALLBACK_PATTERNS) {
-    if (pattern.test(text))
-      return true;
-  }
-  return false;
-}
-function checkSuccessClaim(text) {
-  for (const pattern of SUCCESS_CLAIM_PATTERNS) {
+function check2(text, patterns, label, requireEvidence) {
+  for (const pattern of patterns) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence())
-        return true;
+      if (requireEvidence && hasContainerTestEvidence())
+        return;
+      throw new Error(`[${label}]`);
     }
   }
-  return false;
 }
-function checkModelRestriction(text) {
-  for (const pattern of MODEL_RESTRICTION_PATTERNS) {
-    if (pattern.test(text))
-      return true;
-  }
-  return false;
-}
-function checkMockStub(text) {
-  for (const pattern of MOCK_STUB_PATTERNS) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence())
-        return true;
+function checkL8Behavioral(text) {
+  for (const sig of BEHAVIORAL_PATTERNS) {
+    if (sig.pattern.test(text)) {
+      if (sig.requireEvidence && hasContainerTestEvidence())
+        return;
+      throw new Error(`[L8] ${sig.label}`);
     }
   }
-  return false;
 }
-function checkSimplification(text) {
-  for (const pattern of SIMPLIFICATION_PATTERNS) {
-    if (pattern.test(text))
-      return true;
-  }
-  return false;
+function enforceAgentOutput(text) {
+  check2(text, HOST_FALLBACK_PATTERNS, "L5.1 Host fallback");
+  check2(text, SUCCESS_CLAIM_PATTERNS, "L5.2 Success claim without proof", true);
+  check2(text, MODEL_RESTRICTION_PATTERNS, "L5.3 Model restriction");
+  check2(text, MOCK_STUB_PATTERNS, "L5.4 Mock/stub data", true);
+  check2(text, SIMPLIFICATION_PATTERNS, "L5.5 Oversimplification");
+  check2(text, CONFUSION_PRETENSE_PATTERNS, "L5.6 Confusion pretense");
+  checkScopeCreepWithCrossAgent(text);
+  check2(text, UNDERMINING_PATTERNS, "L5.8 Undermining");
+  check2(text, IMPATIENCE_PATTERNS, "L5.9 Impatience");
+  check2(text, SELF_REFERENCE_PATTERNS, "L5.10 Self-reference", true);
+  checkL8Behavioral(text);
 }
-function checkConfusionPretense(text) {
-  for (const pattern of CONFUSION_PRETENSE_PATTERNS) {
-    if (pattern.test(text))
-      return true;
-  }
-  return false;
-}
-function checkScopeCreep(text) {
+function checkScopeCreepWithCrossAgent(text) {
   for (const pattern of SCOPE_CREEP_PATTERNS) {
     if (pattern.test(text)) {
       for (const cap of CROSS_AGENT_PATTERNS) {
         if (cap.test(text))
-          return true;
+          throw new Error(`[L5.7] Cross-agent tool`);
       }
-      return true;
+      throw new Error(`[L5.7] Scope creep`);
     }
   }
-  return false;
-}
-function checkUndermining(text) {
-  for (const pattern of UNDERMINING_PATTERNS) {
-    if (pattern.test(text))
-      return true;
-  }
-  return false;
-}
-function checkImpatience(text) {
-  for (const pattern of IMPATIENCE_PATTERNS) {
-    if (pattern.test(text))
-      return true;
-  }
-  return false;
-}
-function checkSelfReference(text) {
-  for (const pattern of SELF_REFERENCE_PATTERNS) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence())
-        return true;
-    }
-  }
-  return false;
-}
-function foundSlop(text) {
-  return checkHostFallback(text) || checkSuccessClaim(text) || checkModelRestriction(text) || checkMockStub(text) || checkSimplification(text) || checkConfusionPretense(text) || checkScopeCreep(text) || checkUndermining(text) || checkImpatience(text) || checkSelfReference(text);
 }
 function createMessagesTransformHook() {
   return async (input, output) => {
@@ -15698,22 +15656,12 @@ function createMessagesTransformHook() {
       if (!agent || !isSharkAgent(agent))
         return;
       setCurrentAgent(agent);
-      if (!agentText || agentText.trim().length === 0)
+      if (!agentText || !agentText.trim())
         return;
-      if (foundSlop(agentText)) {
-        const msgs = output?.messages;
-        if (msgs) {
-          for (const msg of msgs) {
-            if (msg?.info?.role === "assistant" && msg?.parts) {
-              for (const part of msg.parts) {
-                if (part?.type === "text")
-                  part.text = "";
-              }
-            }
-          }
-        }
-      }
-    } catch (error49) {}
+      enforceAgentOutput(agentText);
+    } catch (e) {
+      throw e;
+    }
   };
 }
 
@@ -15940,14 +15888,14 @@ var SELF_REFERENCE_PATTERNS2 = [
   /in.*my.*assessment/i,
   /my.*analysis.*shows/i
 ];
-function checkHostFallback2(text) {
+function checkHostFallback(text) {
   for (const pattern of HOST_FALLBACK_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.1] Host fallback detected. ` + `Host testing \u2260 container testing. Container isolation is REQUIRED for ship gate.`);
     }
   }
 }
-function checkSuccessClaim2(text) {
+function checkSuccessClaim(text) {
   for (const pattern of SUCCESS_CLAIM_PATTERNS2) {
     if (pattern.test(text)) {
       if (!hasContainerTestEvidence2()) {
@@ -15956,7 +15904,7 @@ function checkSuccessClaim2(text) {
     }
   }
 }
-function checkImpatience2(text) {
+function checkImpatience(text) {
   for (const pattern of IMPATIENCE_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.9] Impatience detected. ` + `Proper verification takes time. Do not skip required steps.`);
@@ -15984,7 +15932,7 @@ function checkWrongContainer2(text) {
     }
   }
 }
-function checkSelfReference2(text) {
+function checkSelfReference(text) {
   for (const pattern of SELF_REFERENCE_PATTERNS2) {
     if (pattern.test(text)) {
       if (!hasContainerTestEvidence2()) {
@@ -15993,14 +15941,14 @@ function checkSelfReference2(text) {
     }
   }
 }
-function checkModelRestriction2(text) {
+function checkModelRestriction(text) {
   for (const pattern of MODEL_RESTRICTION_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.3] Model restriction excuse detected. ` + `Quality gates apply regardless of model choice.`);
     }
   }
 }
-function checkMockStub2(text) {
+function checkMockStub(text) {
   for (const pattern of MOCK_STUB_PATTERNS2) {
     if (pattern.test(text)) {
       if (!hasContainerTestEvidence2()) {
@@ -16009,14 +15957,14 @@ function checkMockStub2(text) {
     }
   }
 }
-function checkSimplification2(text) {
+function checkSimplification(text) {
   for (const pattern of SIMPLIFICATION_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.5] Oversimplification detected. ` + `Nuance matters. Do not hand-wave complex aspects.`);
     }
   }
 }
-function checkConfusionPretense2(text) {
+function checkConfusionPretense(text) {
   for (const pattern of CONFUSION_PRETENSE_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.6] Confusion pretense detected. ` + `If uncertain, admit it. "Somewhat works" is not an acceptable status.`);
@@ -16035,14 +15983,14 @@ function checkTheatricalVerificationCmd(text) {
     }
   }
 }
-function checkScopeCreep2(text) {
+function checkScopeCreep(text) {
   for (const pattern of SCOPE_CREEP_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.7] Scope creep detected. ` + `Stay on task. Use separate task for new items.`);
     }
   }
 }
-function checkUndermining2(text) {
+function checkUndermining(text) {
   for (const pattern of UNDERMINING_PATTERNS2) {
     if (pattern.test(text)) {
       throw new Error(`[ANTI-DERAILMENT L5.8] Undermining detected. ` + `Quality gates exist for reason. Do not use "not worth it" excuses.`);
@@ -16054,16 +16002,16 @@ function checkMessageEnforcement(text) {
   checkFakeTestRunner2(text);
   checkSourceInspection2(text);
   checkWrongContainer2(text);
-  checkHostFallback2(text);
-  checkSuccessClaim2(text);
-  checkModelRestriction2(text);
-  checkMockStub2(text);
-  checkSimplification2(text);
-  checkConfusionPretense2(text);
-  checkScopeCreep2(text);
-  checkUndermining2(text);
-  checkImpatience2(text);
-  checkSelfReference2(text);
+  checkHostFallback(text);
+  checkSuccessClaim(text);
+  checkModelRestriction(text);
+  checkMockStub(text);
+  checkSimplification(text);
+  checkConfusionPretense(text);
+  checkScopeCreep(text);
+  checkUndermining(text);
+  checkImpatience(text);
+  checkSelfReference(text);
 }
 function createCommandExecuteHook() {
   return async (input, output) => {

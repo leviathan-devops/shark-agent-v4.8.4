@@ -1,8 +1,11 @@
 /**
- * Messages Transform Hook — agent OUTPUT enforcement (TUI mode)
+ * Messages Transform Hook — agent OUTPUT anti-derailment enforcement (TUI mode)
  * 
- * V4.8.3 CP4.1: REMOVED user text from combined check.
- * Only checks AGENT responses, never user messages.
+ * V4.8.3 CP4.8: RESTORED L5 BLOCKING. Silent strip was unacceptable — 
+ * derailment MUST be blocked, not silently cleaned. Short one-liner errors.
+ * 
+ * Only checks AGENT responses (role === 'assistant'), never user messages.
+ * Throws to BLOCK derailment. Error format: [L5.x] Short message.
  */
 import type { Hooks } from '@opencode-ai/plugin';
 import { setCurrentAgent } from './agent-state.js';
@@ -11,175 +14,96 @@ import {
   HOST_FALLBACK_PATTERNS, SUCCESS_CLAIM_PATTERNS, MODEL_RESTRICTION_PATTERNS,
   MOCK_STUB_PATTERNS, SIMPLIFICATION_PATTERNS, CONFUSION_PRETENSE_PATTERNS,
   SCOPE_CREEP_PATTERNS, CROSS_AGENT_PATTERNS, UNDERMINING_PATTERNS,
-  IMPATIENCE_PATTERNS, SELF_REFERENCE_PATTERNS, CONTAINER_TEST_RESULT_FILE,
+  IMPATIENCE_PATTERNS, SELF_REFERENCE_PATTERNS, BEHAVIORAL_PATTERNS,
+  CONTAINER_TEST_RESULT_FILE,
 } from '../../shared/firewall-patterns.js';
 import * as path from 'path';
 import * as fs from 'node:fs';
 
 function hasContainerTestEvidence(): boolean {
-  const evidencePath = path.join(
-    process.cwd(),
-    '.shark',
-    'evidence',
-    'delivery',
-    CONTAINER_TEST_RESULT_FILE
-  );
-  
-  if (!fs.existsSync(evidencePath)) {
-    return false;
-  }
-  
+  const evidencePath = path.join(process.cwd(), '.shark', 'evidence', 'delivery', CONTAINER_TEST_RESULT_FILE);
+  if (!fs.existsSync(evidencePath)) return false;
   try {
     const result = JSON.parse(fs.readFileSync(evidencePath, 'utf-8'));
     return result.overallPassed === true && result.passRate >= 0.96;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
-
-// ALL PATTERNS IMPORTED FROM ../../shared/firewall-patterns.js (SINGLE SOURCE OF TRUTH)
 
 function extractAgentText(output: { messages?: Array<{ info?: { role?: string; agent?: string }; parts?: Array<{ type?: string; text?: string }> }> }): { agentText: string; agent: string | undefined } {
   const messages = output?.messages;
-  if (!messages || messages.length === 0) {
-    return { agentText: '', agent: undefined };
-  }
-  
-  let agentText = '';
-  let agent: string | undefined;
-  
+  if (!messages || messages.length === 0) return { agentText: '', agent: undefined };
+  let agentText = '', agent: string | undefined;
   for (const msg of messages) {
     if (msg?.info?.role === 'assistant') {
-      if (msg?.info?.agent && !agent) {
-        agent = msg.info.agent;
-      }
-      if (msg?.parts) {
-        for (const part of msg.parts) {
-          if (part?.type === 'text' && part?.text) {
-            agentText += (agentText ? ' ' : '') + part.text;
-          }
-        }
-      }
+      if (msg?.info?.agent && !agent) agent = msg.info.agent;
+      if (msg?.parts) for (const part of msg.parts) { if (part?.type === 'text' && part?.text) agentText += (agentText ? ' ' : '') + part.text; }
     }
   }
-  
   return { agentText, agent };
 }
 
-function checkHostFallback(text: string): boolean {
-  for (const pattern of HOST_FALLBACK_PATTERNS) {
-    if (pattern.test(text)) return true;
-  }
-  return false;
-}
+// ============================================================================
+// L5 ANTI-DERAILMENT CHECKS — all throw on detection with short one-liners
+// ============================================================================
 
-function checkSuccessClaim(text: string): boolean {
-  for (const pattern of SUCCESS_CLAIM_PATTERNS) {
+function check(text: string, patterns: RegExp[], label: string, requireEvidence?: boolean): void {
+  for (const pattern of patterns) {
     if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) return true;
+      if (requireEvidence && hasContainerTestEvidence()) return;
+      throw new Error(`[${label}]`);
     }
   }
-  return false;
 }
 
-function checkModelRestriction(text: string): boolean {
-  for (const pattern of MODEL_RESTRICTION_PATTERNS) {
-    if (pattern.test(text)) return true;
-  }
-  return false;
-}
-
-function checkMockStub(text: string): boolean {
-  for (const pattern of MOCK_STUB_PATTERNS) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) return true;
+// L8: Behavioral Intelligence — detects sophisticated derailment patterns
+function checkL8Behavioral(text: string): void {
+  for (const sig of BEHAVIORAL_PATTERNS) {
+    if (sig.pattern.test(text)) {
+      if (sig.requireEvidence && hasContainerTestEvidence()) return;
+      throw new Error(`[L8] ${sig.label}`);
     }
   }
-  return false;
 }
 
-function checkSimplification(text: string): boolean {
-  for (const pattern of SIMPLIFICATION_PATTERNS) {
-    if (pattern.test(text)) return true;
-  }
-  return false;
+function enforceAgentOutput(text: string): void {
+  check(text, HOST_FALLBACK_PATTERNS, 'L5.1 Host fallback');
+  check(text, SUCCESS_CLAIM_PATTERNS, 'L5.2 Success claim without proof', true);
+  check(text, MODEL_RESTRICTION_PATTERNS, 'L5.3 Model restriction');
+  check(text, MOCK_STUB_PATTERNS, 'L5.4 Mock/stub data', true);
+  check(text, SIMPLIFICATION_PATTERNS, 'L5.5 Oversimplification');
+  check(text, CONFUSION_PRETENSE_PATTERNS, 'L5.6 Confusion pretense');
+  checkScopeCreepWithCrossAgent(text);
+  check(text, UNDERMINING_PATTERNS, 'L5.8 Undermining');
+  check(text, IMPATIENCE_PATTERNS, 'L5.9 Impatience');
+  check(text, SELF_REFERENCE_PATTERNS, 'L5.10 Self-reference', true);
+  checkL8Behavioral(text);
 }
 
-function checkConfusionPretense(text: string): boolean {
-  for (const pattern of CONFUSION_PRETENSE_PATTERNS) {
-    if (pattern.test(text)) return true;
-  }
-  return false;
-}
-
-function checkScopeCreep(text: string): boolean {
+function checkScopeCreepWithCrossAgent(text: string): void {
   for (const pattern of SCOPE_CREEP_PATTERNS) {
     if (pattern.test(text)) {
       for (const cap of CROSS_AGENT_PATTERNS) {
-        if (cap.test(text)) return true;
+        if (cap.test(text)) throw new Error(`[L5.7] Cross-agent tool`);
       }
-      return true;
+      throw new Error(`[L5.7] Scope creep`);
     }
   }
-  return false;
 }
 
-function checkUndermining(text: string): boolean {
-  for (const pattern of UNDERMINING_PATTERNS) {
-    if (pattern.test(text)) return true;
-  }
-  return false;
-}
-
-function checkImpatience(text: string): boolean {
-  for (const pattern of IMPATIENCE_PATTERNS) {
-    if (pattern.test(text)) return true;
-  }
-  return false;
-}
-
-function checkSelfReference(text: string): boolean {
-  for (const pattern of SELF_REFERENCE_PATTERNS) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence()) return true;
-    }
-  }
-  return false;
-}
-
-function foundSlop(text: string): boolean {
-  return checkHostFallback(text) || checkSuccessClaim(text) ||
-    checkModelRestriction(text) || checkMockStub(text) ||
-    checkSimplification(text) || checkConfusionPretense(text) ||
-    checkScopeCreep(text) || checkUndermining(text) ||
-    checkImpatience(text) || checkSelfReference(text);
-}
+// ============================================================================
+// EXPORT
+// ============================================================================
 
 export function createMessagesTransformHook(): Hooks['experimental.chat.messages.transform'] {
   return async (input, output) => {
     try {
       const { agentText, agent } = extractAgentText(output);
-      
       if (!agent || !isSharkAgent(agent)) return;
       setCurrentAgent(agent);
-      if (!agentText || agentText.trim().length === 0) return;
-      
-      if (foundSlop(agentText)) {
-        // Silently strip slop — no error thrown to avoid UI spillover
-        // Replace agent text with clean note
-        const msgs = output?.messages;
-        if (msgs) {
-          for (const msg of msgs) {
-            if (msg?.info?.role === 'assistant' && msg?.parts) {
-              for (const part of msg.parts) {
-                if (part?.type === 'text') part.text = '';
-              }
-            }
-          }
-        }
-      }
-    } catch (error) {
-      // Swallow — never let transform errors leak to UI
+      if (!agentText || !agentText.trim()) return;
+      enforceAgentOutput(agentText);
+    } catch (e) {
+      throw e; // Re-throw to block the message
     }
   };
 }
