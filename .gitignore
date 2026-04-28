@@ -7,3 +7,13 @@ dist/*.map
 *.tar.gz
 .sass-cache/
 *.tsbuildinfo
+OPENCODE_WORKSPACE/
+ship-package/
+HANDOVER_PKG/
+tests/
+direct-test.mjs
+test-*.ts
+test-*.mjs
+verify*.mjs
+firewall-pressure-test.ts
+reinject-context.sh
