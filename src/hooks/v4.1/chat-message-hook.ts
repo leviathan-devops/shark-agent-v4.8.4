@@ -15,7 +15,7 @@ import { isSharkAgent } from '../../shared/agent-identity.js';
 export function createChatMessageHook(): Hooks['chat.message'] {
   return async (input, output) => {
     const { agent, sessionID } = input as { agent?: string; sessionID?: string };
-    
+
     if (agent && isSharkAgent(agent)) {
       setCurrentAgent(agent, sessionID);
     }
