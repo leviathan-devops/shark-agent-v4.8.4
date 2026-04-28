@@ -15328,17 +15328,16 @@ function checkCrossAgentTools(tool6) {
 }
 function createGuardianHook(guardian) {
   return async (input, output) => {
-    const { tool: tool6, args, sessionID, agent } = input;
-    const inputAgent = agent;
-    const sessionAgent = getCurrentAgent(sessionID);
-    const toolBasedAgent = tool6.startsWith("shark-") || tool6 === "checkpoint" ? "shark" : undefined;
-    const currentAgent = inputAgent || sessionAgent || toolBasedAgent;
-    if (inputAgent && !sessionAgent) {
-      setCurrentAgent(inputAgent, sessionID);
-    }
+    const { tool: tool6, sessionID } = input;
+    const args = output?.args;
     const command = extractCommandFromArgs(args);
+    const sessionAgent = getCurrentAgent(sessionID);
+    const toolBasedAgent = tool6?.startsWith("shark-") || tool6 === "checkpoint" ? "shark" : undefined;
+    const currentAgent = sessionAgent || toolBasedAgent;
+    if (toolBasedAgent && !sessionAgent) {
+      setCurrentAgent(toolBasedAgent, sessionID);
+    }
     if (DANGEROUS_TOOLS2.has(tool6)) {
-      throw new Error(`[HOOK TEST] tool=${tool6} cmd=${command}`);
       if (command) {
         checkTheatricalVerification(command);
         checkFakeTestRunner(command);

@@ -148,30 +148,22 @@ function checkCrossAgentTools(tool: string): void {
 
 export function createGuardianHook(guardian: Guardian): Hooks['tool.execute.before'] {
   return async (input, output) => {
-    const { tool, args, sessionID, agent } = input as { tool: string; args?: Record<string, unknown>; sessionID?: string; agent?: string };
-
-    // L0: IDENTITY WALL — Use agent from input, session, or tool name inference
-    const inputAgent = agent;
-    const sessionAgent = getCurrentAgent(sessionID);
-
-    // Tool-based agent inference: shark-* tools indicate shark agent
-    const toolBasedAgent = tool.startsWith('shark-') || tool === 'checkpoint' ? 'shark' : undefined;
-
-    const currentAgent = inputAgent || sessionAgent || toolBasedAgent;
-
-    // Update session state if we have agent from input but not from session
-    if (inputAgent && !sessionAgent) {
-      setCurrentAgent(inputAgent, sessionID);
-    }
-
-    // Get command for terminal tools
+    const { tool, sessionID } = input as { tool: string; sessionID?: string; callID?: string };
+    const args = (output as any)?.args as Record<string, unknown> | undefined;
     const command = extractCommandFromArgs(args);
+    
+    // L0: IDENTITY WALL — agent field removed in newer SDK, use session state
+    const sessionAgent = getCurrentAgent(sessionID);
+    const toolBasedAgent = (tool?.startsWith('shark-') || tool === 'checkpoint') ? 'shark' : undefined;
+    const currentAgent = sessionAgent || toolBasedAgent;
+
+    // Update session state when tool-based agent detected but no session state
+    if (toolBasedAgent && !sessionAgent) {
+      setCurrentAgent(toolBasedAgent, sessionID);
+    }
 
     // L0: BLOCK dangerous tools when brain not properly initialized
     if (DANGEROUS_TOOLS.has(tool)) {
-      // TEMP: throw to verify hook is called
-      throw new Error(`[HOOK TEST] tool=${tool} cmd=${command}`);
-      // L1 and L2 checks MUST run regardless of agent state
       // These are critical for preventing theatrical behavior
       if (command) {
         checkTheatricalVerification(command);
