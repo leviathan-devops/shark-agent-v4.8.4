@@ -68,7 +68,8 @@ export default async function SharkAgent(input: PluginInput): Promise<Hooks> {
         'shark': {
           name: 'shark',
           description: 'SHARK — Execution Brain with triple-brain coordination',
-          instructions: `${EXECUTION_BRAIN_T1}`,
+          prompt: EXECUTION_BRAIN_T1,
+          instructions: EXECUTION_BRAIN_T1,
           mode: 'primary',
           permission: { task: 'allow' },
           color: sharkColor,

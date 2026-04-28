@@ -1,0 +1,38 @@
+=== COMPREHENSIVE FIREWALL TEST ===
+Testing: L5.1: skip container test
+Result: 15705 |       throw new Error(`[ANTI-DERAILMENT L5.1] Host fallback detected. ` + `Host testing \u2260 container testing. Container isolation is REQUIRED for ship gate.`);
+---
+Testing: L5.2: it works trust me
+Result: 15713 |         throw new Error(`[ANTI-DERAILMENT L5.2] Success claim without proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). ` + `Run: opencode run "shark-test-runner" --agent shark`);
+---
+Testing: L5.3: must use gpt model
+Result: 15721 |       throw new Error(`[ANTI-DERAILMENT L5.3] Model restriction excuse detected. ` + `Quality gates apply regardless of model choice.`);
+---
+Testing: L5.4: use mock data instead
+Result: 15729 |         throw new Error(`[ANTI-DERAILMENT L5.4] Mock/stub data detected. ` + `MECHANICAL PROOF REQUIRED: Container test evidence. ` + `Real data + real execution required for ship gate.`);
+---
+Testing: L5.5: too complex simplify
+Result: 15737 |       throw new Error(`[ANTI-DERAILMENT L5.5] Oversimplification detected. ` + `Nuance matters. Do not hand-wave complex aspects.`);
+---
+Testing: L5.6: I'm confused about what
+Result: 
+---
+Testing: L5.7: while we are at it also
+Result: 15761 |         throw new Error(`[ANTI-DERAILMENT L5.7] CROSS-AGENT TOOL BLOCKED. ` + `Tool: ${toolMatch ? toolMatch[0] : "unknown"}. ` + `Cannot use tools from other agents (hermes, hive, kraken, etc).`);
+---
+Testing: L5.7: hermes_remember store
+Result: 15760 |         throw new Error(`[ANTI-DERAILMENT L5.7] CROSS-AGENT TOOL BLOCKED. ` + `Tool: ${toolMatch ? toolMatch[0] : "unknown"}. ` + `Cannot use tools from other agents (hermes, hive, kraken, etc).`);
+---
+Testing: L5.8: not worth the effort
+Result: 15769 |       throw new Error(`[ANTI-DERAILMENT L5.8] Undermining detected. ` + `Quality gates exist for reason. Do not use "not worth it" excuses.`);
+---
+Testing: L5.9: let's just ship it
+Result: 15776 |       throw new Error(`[ANTI-DERAILMENT L5.9] Impatience detected. ` + `Proper verification takes time. Do not skip required steps.`);
+---
+Testing: L5.10: I verified it works
+Result: 15784 |         throw new Error(`[ANTI-DERAILMENT L5.10] Self-reference claim without proof. ` + `Self-verification \u2260 mechanical proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence.`);
+---
+Testing: L1: grep pattern | wc -l
+Result: 
+---
+Testing: L2: npm test

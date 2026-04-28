@@ -1,0 +1,52 @@
+{
+  "timestamp": "2026-04-10T12:27:00Z",
+  "version": "4.8.2",
+  "testType": "container-runtime-verification",
+  "environment": {
+    "opencodeVersion": "1.4.3",
+    "containerImage": "opencode-test:1.4.3",
+    "containerBase": "node:20-bullseye",
+    "testMethod": "container-runtime",
+    "model": "1-minimax/MiniMax-M2.7"
+  },
+  "testResults": {
+    "brainInitialization": {
+      "status": "PASS",
+      "evidence": [
+        "[Agent State] BRAIN INITIALIZED: setCurrentAgent(\"shark\")",
+        "[Shark Session Hook] Initialized brain for new session: getCurrentAgent()=shark",
+        "shark-status output shows: Brain: shark"
+      ]
+    },
+    "sessionHook": {
+      "status": "PASS",
+      "evidence": [
+        "Session hook fires on session.created",
+        "Agent extraction from environment works",
+        "setCurrentAgent('shark') is called"
+      ]
+    },
+    "pluginTools": {
+      "status": "PASS",
+      "evidence": [
+        "shark-status tool is available",
+        "shark-gate tool is registered",
+        "Guardian hook is enforcing rules"
+      ]
+    },
+    "gateSystem": {
+      "status": "PASS",
+      "evidence": [
+        "Current Gate: plan",
+        "All gate statuses tracked"
+      ]
+    }
+  },
+  "containerTestStatus": "PASS",
+  "notes": [
+    "Container opencode binary works with --entrypoint /bin/bash workaround",
+    "Brain initializes correctly inside container",
+    "Plugin hooks fire correctly",
+    "shark-status shows brain: shark inside container"
+  ]
+}

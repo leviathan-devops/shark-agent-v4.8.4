@@ -1,0 +1,130 @@
+{
+  "timestamp": "2026-04-10T12:27:00Z",
+  "version": "4.8.2",
+  "testType": "container-runtime-verification",
+  "environment": {
+    "opencodeVersion": "1.4.3",
+    "nodeVersion": "bun",
+    "platform": "linux",
+    "containerImage": "opencode-test:1.4.3",
+    "containerBase": "node:20-bullseye",
+    "testMethod": "container-runtime",
+    "model": "1-minimax/MiniMax-M2.7"
+  },
+  "testResults": {
+    "brainInitialization": {
+      "status": "PASS",
+      "description": "Brain initialized on session.created via session hook",
+      "evidence": [
+        "[Agent State] BRAIN INITIALIZED: setCurrentAgent(\"shark\")",
+        "[Shark Session Hook] Initialized brain for new session: getCurrentAgent()=shark",
+        "shark-status output shows: Brain: shark"
+      ],
+      "mechanism": "session.created event triggers setCurrentAgent('shark') in session-hook.ts"
+    },
+    "sharkStatusTool": {
+      "status": "PASS",
+      "description": "shark-status shows brain=shark inside container",
+      "output": {
+        "variant": "shark",
+        "brain": "shark",
+        "currentGate": "plan",
+        "iteration": "V1.0",
+        "gateStatuses": "all pending"
+      }
+    },
+    "sessionHook": {
+      "status": "PASS",
+      "description": "Session hook properly initializes brain in container environment"
+    },
+    "pluginTools": {
+      "status": "PASS",
+      "description": "shark-status, shark-gate, and other plugin tools available"
+    },
+    "gateSystem": {
+      "status": "PASS",
+      "description": "GateManager tracks currentGate and gateStatuses correctly"
+    },
+    "antiSlopFirewall_L1_StaticVerification": {
+      "status": "PASS",
+      "description": "L1 blocks theatrical grep/wc/cat patterns",
+      "tests": [
+        {"test": "grep -r 'test' /tmp", "result": "BLOCKED", "correct": true},
+        {"test": "cat file | grep pattern", "result": "BLOCKED", "correct": true},
+        {"test": "wc -l file", "result": "BLOCKED", "correct": true},
+        {"test": "echo simple command", "result": "PASSED", "correct": true}
+      ]
+    },
+    "antiSlopFirewall_L2_FakeTestRunners": {
+      "status": "PASS",
+      "description": "L2 blocks fake test runners that bypass plugin hooks",
+      "tests": [
+        {"test": "jest --coverage", "result": "BLOCKED", "correct": true},
+        {"test": "node run-tests.js", "result": "BLOCKED", "correct": true}
+      ]
+    },
+    "antiSlopFirewall_L3_SourceInspection": {
+      "status": "PASS",
+      "description": "L3 blocks source inspection to verify work",
+      "tests": [
+        {"test": "[ -f path ] && echo exists", "result": "BLOCKED", "correct": true},
+        {"test": "test -f path (simple)", "result": "PASSED", "correct": true}
+      ]
+    },
+    "antiSlopFirewall_L4_NonExistentCommands": {
+      "status": "PASS",
+      "description": "L4 blocks hallucinated opencode container commands",
+      "tests": [
+        {"test": "opencode container run", "result": "BLOCKED", "correct": true}
+      ]
+    },
+    "guardianEnforcement": {
+      "status": "PASS",
+      "description": "Guardian enforces dangerous tool blocking when brain is unknown"
+    },
+    "dockerExecution": {
+      "status": "PASS",
+      "description": "Docker commands execute correctly",
+      "testCommand": "docker run --rm hello-world",
+      "result": "Success"
+    },
+    "containerBuild": {
+      "status": "PASS",
+      "description": "Custom container image built successfully with opencode 1.4.3",
+      "image": "opencode-test:1.4.3",
+      "versionMatch": true
+    }
+  },
+  "containerTestStatus": "PASS",
+  "containerTestDetails": {
+    "workaround": "Used --entrypoint /bin/bash to bypass npm entrypoint, ran actual binary directly",
+    "command": "docker run --rm --entrypoint /bin/bash -v /tmp/shark-container-test/config:/root/.config/opencode -v /tmp/shark-container-test/plugins:/root/.config/opencode/plugins opencode-test:1.4.3 /ftest.sh",
+    "modelUsed": "1-minimax/MiniMax-M2.7",
+    "brainInitTime": "session.created event",
+    "evidence": [
+      "Brain: shark (inside container)",
+      "[Agent State] BRAIN INITIALIZED: setCurrentAgent(\"shark\")",
+      "[Shark Session Hook] Initialized brain for new session"
+    ]
+  },
+  "knownIssues": [],
+  "recommendations": [
+    "Container runtime test now working",
+    "Use --entrypoint /bin/bash workaround for container testing",
+    "Plugin verified to work inside container"
+  ],
+  "evidenceFiles": [
+    "/home/leviathan/OPENCODE_WORKSPACE/DEBUG LOGS/FIREWALL_TEST_LOG_2026-04-10.md",
+    "/home/leviathan/OPENCODE_WORKSPACE/DEBUG LOGS/CONTAINER_TEST_WORKFLOW_COMPLETE.md",
+    "/home/leviathan/OPENCODE_WORKSPACE/DEBUG LOGS/container-test-evidence-2026-04-10.json"
+  ],
+  "verificationComplete": true,
+  "verificationTimestamp": "2026-04-10T12:27:00Z",
+  "firewallVerdict": {
+    "L1": "FUNCTIONING_CORRECTLY",
+    "L2": "FUNCTIONING_CORRECTLY",
+    "L3": "FUNCTIONING_CORRECTLY",
+    "L4": "FUNCTIONING_CORRECTLY",
+    "overall": "NO_DERAILMENT_SUCCESSFUL"
+  }
+}
