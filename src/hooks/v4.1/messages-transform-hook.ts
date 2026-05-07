@@ -1,20 +1,17 @@
 /**
- * Messages Transform Hook — agent OUTPUT anti-derailment enforcement (TUI mode)
+ * Messages Transform Hook — agent OUTPUT anti-derailment enforcement
  * 
- * V4.8.3 CP4.8: RESTORED L5 BLOCKING. Silent strip was unacceptable — 
- * derailment MUST be blocked, not silently cleaned. Short one-liner errors.
- * 
- * Only checks AGENT responses (role === 'assistant'), never user messages.
- * Throws to BLOCK derailment. Error format: [L5.x] Short message.
+ * V4.8.4: L5.11 Anti-Laundering integrated.
  */
 import type { Hooks } from '@opencode-ai/plugin';
-import { setCurrentAgent } from './agent-state.js';
+import { setCurrentAgent, incrementSlopScore, getSlopScore } from './agent-state.js';
 import { isSharkAgent } from '../../shared/agent-identity.js';
 import {
   HOST_FALLBACK_PATTERNS, SUCCESS_CLAIM_PATTERNS, MODEL_RESTRICTION_PATTERNS,
   MOCK_STUB_PATTERNS, SIMPLIFICATION_PATTERNS, CONFUSION_PRETENSE_PATTERNS,
   SCOPE_CREEP_PATTERNS, CROSS_AGENT_PATTERNS, UNDERMINING_PATTERNS,
   IMPATIENCE_PATTERNS, SELF_REFERENCE_PATTERNS, BEHAVIORAL_PATTERNS,
+  LAUNDERING_PATTERNS,
   CONTAINER_TEST_RESULT_FILE,
 } from '../../shared/firewall-patterns.js';
 import * as path from 'path';
@@ -29,81 +26,136 @@ function hasContainerTestEvidence(): boolean {
   } catch { return false; }
 }
 
-function extractAgentText(output: { messages?: Array<{ info?: { role?: string; agent?: string }; parts?: Array<{ type?: string; text?: string }> }> }): { agentText: string; agent: string | undefined } {
-  const messages = output?.messages;
-  if (!messages || messages.length === 0) return { agentText: '', agent: undefined };
-  let agentText = '', agent: string | undefined;
-  for (const msg of messages) {
-    if (msg?.info?.role === 'assistant') {
-      if (msg?.info?.agent && !agent) agent = msg.info.agent;
-      if (msg?.parts) for (const part of msg.parts) { if (part?.type === 'text' && part?.text) agentText += (agentText ? ' ' : '') + part.text; }
+function extractTextFromParts(parts: unknown): string {
+  if (!Array.isArray(parts)) return '';
+  let text = '';
+  for (const part of parts) {
+    if (part && (part as any).type === 'text' && (part as any).text) {
+      text += (text ? ' ' : '') + (part as any).text;
     }
   }
-  return { agentText, agent };
+  return text;
 }
 
-// ============================================================================
-// L5 ANTI-DERAILMENT CHECKS — all throw on detection with short one-liners
-// ============================================================================
+const BLOCK_MESSAGES: Record<string, string> = {
+  'L5.1 Host fallback': 'Your response was BLOCKED by the mechanical firewall. You attempted to suggest host-based testing instead of container testing. Host testing DOES NOT EQUAL container testing. Container isolation is REQUIRED for ship gate. Use the proper container testing workflow. Do NOT advance gates with host-based params.',
+  'L5.2 Success claim without proof': 'Your response was BLOCKED by the mechanical firewall. You claimed success without mechanical proof. MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). Self-verification is NOT proof.',
+  'L5.3 Model restriction': 'Your response was BLOCKED by the mechanical firewall. You referenced model restrictions or limitations. Quality gates apply regardless of model choice.',
+  'L5.4 Mock/stub data': 'Your response was BLOCKED by the mechanical firewall. You proposed mock, stub, or fake data. MECHANICAL PROOF REQUIRED: Container test evidence. Real data + real execution required.',
+  'L5.5 Oversimplification': 'Your response was BLOCKED by the mechanical firewall. You oversimplified or hand-waved complex aspects. Nuance matters. Address the full complexity.',
+  'L5.6 Confusion pretense': 'Your response was BLOCKED by the mechanical firewall. You used hedging language ("somewhat works", "kinda", "mostly"). If uncertain, admit it clearly. "Somewhat works" is not acceptable.',
+  'L5.7 Scope creep': 'Your response was BLOCKED by the mechanical firewall. You expanded scope beyond the current task. Stay on task. Use a separate task for new items.',
+  'L5.7 Cross-agent tool': 'Your response was BLOCKED by the mechanical firewall. You referenced cross-agent tools (hermes, hive, kraken). These are NOT available to shark agents. Use only shark tools.',
+  'L5.8 Undermining': 'Your response was BLOCKED by the mechanical firewall. You undermined quality gates with "not worth it" or "diminishing returns" excuses. Quality gates exist for reason.',
+  'L5.9 Impatience': 'Your response was BLOCKED by the mechanical firewall. You showed impatience ("ship it", "good enough", "just deploy"). Proper verification takes time. Do not skip steps.',
+  'L5.10 Self-reference': 'Your response was BLOCKED by the mechanical firewall. You claimed self-verification ("I have verified", "my assessment is"). Self-verification IS NOT mechanical proof. MECHANICAL PROOF REQUIRED.',
+  'L5.11 Progress Laundering': 'Your response was BLOCKED by the mechanical firewall. You attempted to launder results via a summary or pass-rate claim without providing raw evidence. RAW LOGS ARE THE ONLY EVIDENCE. Summarization is a bypass attempt.',
+};
 
-function check(text: string, patterns: RegExp[], label: string, requireEvidence?: boolean): void {
+function blockMessage(label: string): string {
+  return `[ANTI-DERAILMENT BLOCKED: ${label}]\n\n${BLOCK_MESSAGES[label] || `Your response was blocked by mechanical firewall rule ${label}.`}`;
+}
+
+function blockLabel(text: string, patterns: RegExp[], label: string, requireEvidence?: boolean): string | null {
   for (const pattern of patterns) {
     if (pattern.test(text)) {
-      if (requireEvidence && hasContainerTestEvidence()) return;
-      throw new Error(`[${label}]`);
+      if (requireEvidence && hasContainerTestEvidence()) return null;
+      return label;
     }
   }
+  return null;
 }
 
-// L8: Behavioral Intelligence — detects sophisticated derailment patterns
-function checkL8Behavioral(text: string): void {
+function blockLabelL8(text: string): string | null {
   for (const sig of BEHAVIORAL_PATTERNS) {
     if (sig.pattern.test(text)) {
-      if (sig.requireEvidence && hasContainerTestEvidence()) return;
-      throw new Error(`[L8] ${sig.label}`);
+      if (sig.requireEvidence && hasContainerTestEvidence()) return null;
+      return `L8 ${sig.label}`;
     }
   }
+  return null;
 }
 
-function enforceAgentOutput(text: string): void {
-  check(text, HOST_FALLBACK_PATTERNS, 'L5.1 Host fallback');
-  check(text, SUCCESS_CLAIM_PATTERNS, 'L5.2 Success claim without proof', true);
-  check(text, MODEL_RESTRICTION_PATTERNS, 'L5.3 Model restriction');
-  check(text, MOCK_STUB_PATTERNS, 'L5.4 Mock/stub data', true);
-  check(text, SIMPLIFICATION_PATTERNS, 'L5.5 Oversimplification');
-  check(text, CONFUSION_PRETENSE_PATTERNS, 'L5.6 Confusion pretense');
-  checkScopeCreepWithCrossAgent(text);
-  check(text, UNDERMINING_PATTERNS, 'L5.8 Undermining');
-  check(text, IMPATIENCE_PATTERNS, 'L5.9 Impatience');
-  check(text, SELF_REFERENCE_PATTERNS, 'L5.10 Self-reference', true);
-  checkL8Behavioral(text);
-}
-
-function checkScopeCreepWithCrossAgent(text: string): void {
+function blockLabelScopeCreep(text: string): string | null {
   for (const pattern of SCOPE_CREEP_PATTERNS) {
     if (pattern.test(text)) {
       for (const cap of CROSS_AGENT_PATTERNS) {
-        if (cap.test(text)) throw new Error(`[L5.7] Cross-agent tool`);
+        if (cap.test(text)) return 'L5.7 Cross-agent tool';
       }
-      throw new Error(`[L5.7] Scope creep`);
+      return 'L5.7 Scope creep';
+    }
+  }
+  return null;
+}
+
+function detectDerailment(text: string, sessionID: string): string | null {
+  const slopScore = getSlopScore(sessionID);
+  const isUltraStrict = slopScore >= 5;
+
+  const block = blockLabel(text, HOST_FALLBACK_PATTERNS, 'L5.1 Host fallback')
+    || blockLabel(text, SUCCESS_CLAIM_PATTERNS, 'L5.2 Success claim without proof', true)
+    || blockLabel(text, MODEL_RESTRICTION_PATTERNS, 'L5.3 Model restriction')
+    || blockLabel(text, MOCK_STUB_PATTERNS, 'L5.4 Mock/stub data', true)
+    || blockLabel(text, SIMPLIFICATION_PATTERNS, 'L5.5 Oversimplification')
+    || blockLabel(text, CONFUSION_PRETENSE_PATTERNS, 'L5.6 Confusion pretense')
+    || blockLabelScopeCreep(text)
+    || blockLabel(text, UNDERMINING_PATTERNS, 'L5.8 Undermining')
+    || blockLabel(text, IMPATIENCE_PATTERNS, 'L5.9 Impatience')
+    || blockLabel(text, SELF_REFERENCE_PATTERNS, 'L5.10 Self-reference', true)
+    || blockLabel(text, LAUNDERING_PATTERNS, 'L5.11 Progress Laundering')
+    || blockLabelL8(text);
+
+  if (block) {
+    incrementSlopScore(sessionID, 1);
+  }
+
+  if (isUltraStrict && !block) {
+    if (text.length < 50) {
+      return 'L8 ULTRA-STRICT: Response too vague. High slop score detected. Please provide detailed mechanical evidence.';
+    }
+  }
+
+  return block;
+}
+
+function replaceTextParts(parts: unknown, label: string): void {
+  if (!Array.isArray(parts)) return;
+  let replaced = false;
+  const msg = blockMessage(label);
+  for (const part of parts) {
+    if (part && (part as any).type === 'text') {
+      (part as any).text = replaced ? '' : msg;
+      replaced = true;
     }
   }
 }
 
-// ============================================================================
-// EXPORT
-// ============================================================================
-
 export function createMessagesTransformHook(): Hooks['experimental.chat.messages.transform'] {
   return async (input, output) => {
-    try {
-      const { agentText, agent } = extractAgentText(output);
-      if (!agent || !isSharkAgent(agent)) return;
-      setCurrentAgent(agent);
-      if (!agentText || !agentText.trim()) return;
-      enforceAgentOutput(agentText);
-    } catch (e) {
-      throw e; // Re-throw to block the message
+    const { sessionID } = input as { sessionID?: string };
+    const messages = output?.messages;
+    if (!messages || messages.length === 0) return;
+
+    for (const msg of messages) {
+      if (msg?.info?.role === 'assistant' && msg?.info?.agent) {
+        if (isSharkAgent(msg.info.agent)) {
+          setCurrentAgent(msg.info.agent, sessionID);
+          break;
+        }
+      }
+    }
+
+    for (const msg of messages) {
+      if (msg?.info?.role !== 'assistant') continue;
+      if (!msg?.info?.agent || !isSharkAgent(msg.info.agent)) continue;
+
+      const text = extractTextFromParts(msg.parts);
+      if (!text.trim()) continue;
+
+      const block = detectDerailment(text, sessionID || '');
+      if (block) {
+        replaceTextParts(msg.parts, block);
+      }
     }
   };
 }

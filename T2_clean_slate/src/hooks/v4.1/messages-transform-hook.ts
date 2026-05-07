@@ -1,0 +1,160 @@
+/**
+ * Messages Transform Hook — agent OUTPUT anti-derailment enforcement
+ * 
+ * V4.8.3 CP4.16.1: DERAILEMENT BLOCKING VIA TEXT REPLACEMENT.
+ * 
+ * WHY NO THROWS: messages.transform is an experimental.* hook. Throwing
+ * from experimental hooks is a HARD FAILURE — session dies, output stops,
+ * agent is unusable. Container TUI testing confirms this.
+ * 
+ * WHY REPLACEMENT: Instead of throwing, we MODIFY the agent's message text
+ * in-place. When derailment is detected, all text parts are replaced with
+ * an authoritative anti-derailment block directive. The model sees this
+ * directive in conversation context on the NEXT turn. Session continues.
+ * 
+ * LIMITATION: The current turn's text is already rendered in TUI before
+ * this hook fires. The replacement affects only the model's NEXT turn.
+ * The TUI displays the original text. This is a hook timing limitation
+ * (no pre-render hook exists for assistant messages).
+ * 
+ * Only checks AGENT responses (role === 'assistant'), never user messages.
+ */
+import type { Hooks } from '@opencode-ai/plugin';
+import { setCurrentAgent } from './agent-state.js';
+import { isSharkAgent } from '../../shared/agent-identity.js';
+import {
+  HOST_FALLBACK_PATTERNS, SUCCESS_CLAIM_PATTERNS, MODEL_RESTRICTION_PATTERNS,
+  MOCK_STUB_PATTERNS, SIMPLIFICATION_PATTERNS, CONFUSION_PRETENSE_PATTERNS,
+  SCOPE_CREEP_PATTERNS, CROSS_AGENT_PATTERNS, UNDERMINING_PATTERNS,
+  IMPATIENCE_PATTERNS, SELF_REFERENCE_PATTERNS, BEHAVIORAL_PATTERNS,
+  CONTAINER_TEST_RESULT_FILE,
+} from '../../shared/firewall-patterns.js';
+import * as path from 'path';
+import * as fs from 'node:fs';
+
+function hasContainerTestEvidence(): boolean {
+  const evidencePath = path.join(process.cwd(), '.shark', 'evidence', 'delivery', CONTAINER_TEST_RESULT_FILE);
+  if (!fs.existsSync(evidencePath)) return false;
+  try {
+    const result = JSON.parse(fs.readFileSync(evidencePath, 'utf-8'));
+    return result.overallPassed === true && result.passRate >= 0.96;
+  } catch { return false; }
+}
+
+function extractTextFromParts(parts: unknown): string {
+  if (!Array.isArray(parts)) return '';
+  let text = '';
+  for (const part of parts) {
+    if (part && (part as any).type === 'text' && (part as any).text) {
+      text += (text ? ' ' : '') + (part as any).text;
+    }
+  }
+  return text;
+}
+
+const BLOCK_MESSAGES: Record<string, string> = {
+  'L5.1 Host fallback': 'Your response was BLOCKED by the mechanical firewall. You attempted to suggest host-based testing instead of container testing. Host testing DOES NOT EQUAL container testing. Container isolation is REQUIRED for ship gate. Use the proper container testing workflow. Do NOT advance gates with host-based params.',
+  'L5.2 Success claim without proof': 'Your response was BLOCKED by the mechanical firewall. You claimed success without mechanical proof. MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). Self-verification is NOT proof.',
+  'L5.3 Model restriction': 'Your response was BLOCKED by the mechanical firewall. You referenced model restrictions or limitations. Quality gates apply regardless of model choice.',
+  'L5.4 Mock/stub data': 'Your response was BLOCKED by the mechanical firewall. You proposed mock, stub, or fake data. MECHANICAL PROOF REQUIRED: Container test evidence. Real data + real execution required.',
+  'L5.5 Oversimplification': 'Your response was BLOCKED by the mechanical firewall. You oversimplified or hand-waved complex aspects. Nuance matters. Address the full complexity.',
+  'L5.6 Confusion pretense': 'Your response was BLOCKED by the mechanical firewall. You used hedging language ("somewhat works", "kinda", "mostly"). If uncertain, admit it clearly. "Somewhat works" is not acceptable.',
+  'L5.7 Scope creep': 'Your response was BLOCKED by the mechanical firewall. You expanded scope beyond the current task. Stay on task. Use a separate task for new items.',
+  'L5.7 Cross-agent tool': 'Your response was BLOCKED by the mechanical firewall. You referenced cross-agent tools (hermes, hive, kraken). These are NOT available to shark agents. Use only shark tools.',
+  'L5.8 Undermining': 'Your response was BLOCKED by the mechanical firewall. You undermined quality gates with "not worth it" or "diminishing returns" excuses. Quality gates exist for reason.',
+  'L5.9 Impatience': 'Your response was BLOCKED by the mechanical firewall. You showed impatience ("ship it", "good enough", "just deploy"). Proper verification takes time. Do not skip steps.',
+  'L5.10 Self-reference': 'Your response was BLOCKED by the mechanical firewall. You claimed self-verification ("I have verified", "my assessment is"). Self-verification IS NOT mechanical proof. MECHANICAL PROOF REQUIRED.',
+};
+
+function blockMessage(label: string): string {
+  return `[ANTI-DERAILMENT BLOCKED: ${label}]\n\n${BLOCK_MESSAGES[label] || `Your response was blocked by mechanical firewall rule ${label}.`}`;
+}
+
+function blockLabel(text: string, patterns: RegExp[], label: string, requireEvidence?: boolean): string | null {
+  for (const pattern of patterns) {
+    if (pattern.test(text)) {
+      if (requireEvidence && hasContainerTestEvidence()) return null;
+      return label;
+    }
+  }
+  return null;
+}
+
+function blockLabelL8(text: string): string | null {
+  for (const sig of BEHAVIORAL_PATTERNS) {
+    if (sig.pattern.test(text)) {
+      if (sig.requireEvidence && hasContainerTestEvidence()) return null;
+      return `L8 ${sig.label}`;
+    }
+  }
+  return null;
+}
+
+function blockLabelScopeCreep(text: string): string | null {
+  for (const pattern of SCOPE_CREEP_PATTERNS) {
+    if (pattern.test(text)) {
+      for (const cap of CROSS_AGENT_PATTERNS) {
+        if (cap.test(text)) return 'L5.7 Cross-agent tool';
+      }
+      return 'L5.7 Scope creep';
+    }
+  }
+  return null;
+}
+
+function detectDerailment(text: string): string | null {
+  return blockLabel(text, HOST_FALLBACK_PATTERNS, 'L5.1 Host fallback')
+    || blockLabel(text, SUCCESS_CLAIM_PATTERNS, 'L5.2 Success claim without proof', true)
+    || blockLabel(text, MODEL_RESTRICTION_PATTERNS, 'L5.3 Model restriction')
+    || blockLabel(text, MOCK_STUB_PATTERNS, 'L5.4 Mock/stub data', true)
+    || blockLabel(text, SIMPLIFICATION_PATTERNS, 'L5.5 Oversimplification')
+    || blockLabel(text, CONFUSION_PRETENSE_PATTERNS, 'L5.6 Confusion pretense')
+    || blockLabelScopeCreep(text)
+    || blockLabel(text, UNDERMINING_PATTERNS, 'L5.8 Undermining')
+    || blockLabel(text, IMPATIENCE_PATTERNS, 'L5.9 Impatience')
+    || blockLabel(text, SELF_REFERENCE_PATTERNS, 'L5.10 Self-reference', true)
+    || blockLabelL8(text);
+}
+
+function replaceTextParts(parts: unknown, label: string): void {
+  if (!Array.isArray(parts)) return;
+  let replaced = false;
+  const msg = blockMessage(label);
+  for (const part of parts) {
+    if (part && (part as any).type === 'text') {
+      (part as any).text = replaced ? '' : msg;
+      replaced = true;
+    }
+  }
+}
+
+export function createMessagesTransformHook(): Hooks['experimental.chat.messages.transform'] {
+  return async (input, output) => {
+    const messages = output?.messages;
+    if (!messages || messages.length === 0) return;
+
+    // Brain init from first shark assistant message found
+    for (const msg of messages) {
+      if (msg?.info?.role === 'assistant' && msg?.info?.agent) {
+        if (isSharkAgent(msg.info.agent)) {
+          setCurrentAgent(msg.info.agent);
+          break;
+        }
+      }
+    }
+
+    // L5/L8 ENFORCEMENT: check agent output, BLOCK derailment via text replacement
+    for (const msg of messages) {
+      if (msg?.info?.role !== 'assistant') continue;
+      if (!msg?.info?.agent || !isSharkAgent(msg.info.agent)) continue;
+
+      const text = extractTextFromParts(msg.parts);
+      if (!text.trim()) continue;
+
+      const block = detectDerailment(text);
+      if (block) {
+        replaceTextParts(msg.parts, block);
+      }
+    }
+  };
+}

@@ -1,5 +1,5 @@
 /**
- * Shark Hooks (v4.8.4 — HOTFIX)
+ * Shark Hooks (v4.8.3 CP4.16.1 — messages.transform text replacement, no throws)
  */
 import type { Hooks } from '@opencode-ai/plugin';
 import { Guardian } from '../shared/guardian.js';
@@ -22,21 +22,20 @@ export function createSharkHooks(
   guardian: Guardian,
   gateManager: GateManager,
   evidenceCollector: EvidenceCollector,
-  peerDispatch: SharkPeerDispatch | undefined,
   stateStore: StateStore,
   messenger: SharkMessenger
 ): Hooks {
   return {
-    event: createSessionHook(gateManager, evidenceCollector, peerDispatch, stateStore, messenger),
+    event: createSessionHook(gateManager, evidenceCollector, undefined, stateStore, messenger),
     'chat.message': createChatMessageHook(),
     'command.execute.before': createCommandExecuteHook(),
     'experimental.chat.messages.transform': createMessagesTransformHook(),
-    'tool.execute.before': createGuardianHook(guardian),
+    'tool.execute.before': createGuardianHook(guardian, gateManager),
     'tool.execute.after': (input, output) => {
       createToolSummarizerHook()(input, output);
-      createGateHook(gateManager, evidenceCollector, peerDispatch)(input, output);
+      createGateHook(gateManager, evidenceCollector, undefined)(input, output);
     },
     'experimental.session.compacting': createCompactingHook(gateManager),
-    'experimental.chat.system.transform': createSystemTransformHook(gateManager, peerDispatch),
+    'experimental.chat.system.transform': createSystemTransformHook(gateManager, undefined),
   };
 }

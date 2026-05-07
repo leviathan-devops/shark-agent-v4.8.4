@@ -5,14 +5,20 @@
  * - grep → "Found X matches in Y files"
  * - ls → "X entries (showing first 20)"
  * - read → First 100 lines + [truncated]
+ * 
+ * CRITICAL: Only fires for shark agents.
  */
 import type { Hooks } from '@opencode-ai/plugin';
+import { getCurrentAgent } from './agent-state.js';
+import { isSharkAgent } from '../../shared/agent-identity.js';
 
 const MAX_OUTPUT_LINES = 100;
 const MAX_LS_ENTRIES = 20;
 
 export function createToolSummarizerHook(): Hooks['tool.execute.after'] {
   return async (input, output) => {
+    if (!isSharkAgent(getCurrentAgent())) return;
+
     const tool = input.tool;
     let outputStr = output.output || '';
 

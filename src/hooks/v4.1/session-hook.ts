@@ -34,7 +34,7 @@ export function createSessionHook(
 ): Hooks['event'] {
   return async (input) => {
     const event = input.event as { type?: string; sessionId?: string; agent?: string };
-    
+
     if (!event?.type) return;
 
     if (!isSharkAgent(event.agent)) {
@@ -44,19 +44,31 @@ export function createSessionHook(
 
     setCurrentAgent(event.agent, event.sessionId);
 
-    switch (event.type) {
-      case 'session.created':
-        handleSessionCreated(gateManager, peerDispatch);
-        // INJECT BUILD CONTEXT ON SESSION START
-        injectBuildContext();
-        break;
-      case 'session.ended':
-        handleSessionEnded(stateStore, messenger);
-        contextInjectedThisSession = false;
-        break;
+    if (event.type === 'session.created') {
+      handleSessionCreated(gateManager, peerDispatch);
+      
+      try {
+        const sopPath = path.join(process.cwd(), '.shark', 'resumption-sop.md');
+        if (fs.existsSync(sopPath)) {
+          const sop = fs.readFileSync(sopPath, 'utf-8');
+          messenger.send({
+            from: 'system',
+            to: 'execution-brain',
+            type: 'directive',
+            priority: 'critical',
+            payload: { content: sop, label: 'RESUMPTION_SOP' },
+            requiresAck: true,
+          });
+        }
+      } catch (err) {
+        // Silent fail
+      }
+    } else if (event.type === 'session.ended') {
+      handleSessionEnded(stateStore, messenger);
     }
   };
 }
+
 
 /**
  * Injects build context from .shark/build-context.md

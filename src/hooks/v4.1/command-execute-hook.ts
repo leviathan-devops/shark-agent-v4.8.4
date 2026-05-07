@@ -448,24 +448,27 @@ function checkMessageEnforcement(text: string): void {
 export function createCommandExecuteHook(): Hooks['command.execute.before'] {
   return async (input, output) => {
     const { command, arguments: args } = input;
-    
+
     if (!command) {
       return;
     }
-    
+
     if (command === 'run' && args) {
       const agentMatch = args.match(/--agent\s+(\S+)/);
       const agentName = agentMatch ? agentMatch[1] : null;
-      
-      if (agentName && isSharkAgent(agentName)) {
-        setCurrentAgent(agentName);
-        
-        const agentIndex = args.indexOf('--agent');
-        const message = agentIndex > 0 ? args.substring(0, agentIndex).trim() : args;
-        
-        if (message && message.length > 0) {
-          checkMessageEnforcement(message);
-        }
+
+      // NOT A SHARK AGENT — Shark firewall does not apply
+      if (!agentName || !isSharkAgent(agentName)) {
+        return;
+      }
+
+      setCurrentAgent(agentName);
+
+      const agentIndex = args.indexOf('--agent');
+      const message = agentIndex > 0 ? args.substring(0, agentIndex).trim() : args;
+
+      if (message && message.length > 0) {
+        checkMessageEnforcement(message);
       }
     }
   };

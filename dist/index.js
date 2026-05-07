@@ -16,9 +16,18 @@ var __export = (target, all) => {
 var __require = import.meta.require;
 
 // src/index.ts
-import * as path10 from "path";
+import * as path13 from "path";
 
 // src/shared/state-store.ts
+class FirewallStateStore {
+  _states = new Map;
+  getState(sessionID) {
+    if (!this._states.has(sessionID)) {
+      this._states.set(sessionID, { brainInitialized: false, currentAgent: null });
+    }
+    return this._states.get(sessionID);
+  }
+}
 var DOMAIN_OWNERSHIP = {
   "plan-state": ["shark-plan-brain"],
   "shark-state": ["shark-execution-brain"],
@@ -211,6 +220,14 @@ function createSharkMessenger() {
 
 // src/shared/guardian.ts
 import * as fs from "fs";
+var ZONE_PERMISSIONS = {
+  plan: { forbidden: ["PERSONAL", "SYSTEM", "CONFIG"], allowed: ["WORKSPACE", "DEVELOPMENT", "SANDBOX"] },
+  build: { forbidden: ["PERSONAL", "SYSTEM", "CONFIG"], allowed: ["WORKSPACE", "DEVELOPMENT", "SANDBOX"] },
+  test: { forbidden: ["PERSONAL", "SYSTEM", "CONFIG", "WORKSPACE"], allowed: ["SANDBOX", "DEVELOPMENT"] },
+  verify: { forbidden: ["PERSONAL", "SYSTEM", "CONFIG", "WORKSPACE"], allowed: ["SANDBOX", "DEVELOPMENT"] },
+  audit: { forbidden: ["PERSONAL", "SYSTEM", "CONFIG", "WORKSPACE"], allowed: ["SANDBOX", "DEVELOPMENT"] },
+  delivery: { forbidden: ["PERSONAL", "SYSTEM", "CONFIG", "WORKSPACE", "DEVELOPMENT"], allowed: ["SANDBOX"] }
+};
 var DANGEROUS_PATTERNS = [
   /^rm\s+-rf\s+\//,
   /^rm\s+-rf\s+\/bin/,
@@ -325,17 +342,21 @@ class Guardian {
       return true;
     return this.checkPath(path, "read");
   }
-  canWrite(path) {
-    if (this.level === "SANDBOX") {
-      return !this.isDangerousCommand(path);
-    }
-    return this.checkPath(path, "write");
+  canWrite(path, currentGate = "plan") {
+    const zone = this.classifyZone(path);
+    const perms = ZONE_PERMISSIONS[currentGate] || ZONE_PERMISSIONS["plan"];
+    if (path.includes(".shark/evidence") || path.includes(".shark/iterations"))
+      return true;
+    if (perms.forbidden.includes(zone))
+      return false;
+    if (perms.allowed.includes(zone))
+      return true;
+    return this.level === "SANDBOX";
   }
   isDangerousCommand(command) {
     for (const pattern of DANGEROUS_PATTERNS) {
-      if (pattern.test(command.trim())) {
+      if (pattern.test(command.trim()))
         return true;
-      }
     }
     return false;
   }
@@ -358,29 +379,23 @@ class Guardian {
   extractFilePathsFromCommand(command) {
     const paths = [];
     const allPathMatches = command.matchAll(/(?:^|\s)([\/~]?[\w\/\.-]+\.ts)(?:\s|$|[&|;])/g);
-    for (const match of allPathMatches) {
+    for (const match of allPathMatches)
       paths.push(match[1]);
-    }
     const quotedPathMatches = command.matchAll(/[\/"']([\/~]?[\w\/\.-]+\.ts)[\/"']/g);
-    for (const match of quotedPathMatches) {
+    for (const match of quotedPathMatches)
       paths.push(match[1]);
-    }
     const teeMatch = command.match(/tee\s+([^\s|]+)/);
-    if (teeMatch && teeMatch[1]) {
+    if (teeMatch && teeMatch[1])
       paths.push(teeMatch[1]);
-    }
     const catRedirectMatch = command.match(/cat\s+(?:<<\w+\s+)?>\s*([^\s>]+)/);
-    if (catRedirectMatch && catRedirectMatch[1]) {
+    if (catRedirectMatch && catRedirectMatch[1])
       paths.push(catRedirectMatch[1]);
-    }
     const ddOfMatch = command.match(/dd\s+.*\s+of=([^\s]+)/);
-    if (ddOfMatch && ddOfMatch[1]) {
+    if (ddOfMatch && ddOfMatch[1])
       paths.push(ddOfMatch[1]);
-    }
     const redirectPathMatch = command.match(/>\s*([^\s]+(?:\.ts))[^\s]*$/m);
-    if (redirectPathMatch && redirectPathMatch[1]) {
+    if (redirectPathMatch && redirectPathMatch[1])
       paths.push(redirectPathMatch[1]);
-    }
     return [...new Set(paths)];
   }
   canModifyFile(command) {
@@ -389,17 +404,11 @@ class Guardian {
         const filePaths = this.extractFilePathsFromCommand(command);
         for (const filePath of filePaths) {
           if (this.isSourceFile(filePath)) {
-            if (this.editHistory.editedFiles.has(filePath)) {
+            if (this.editHistory.editedFiles.has(filePath))
               return { allowed: true };
-            }
-            if (this.isFileWithinGracePeriod(filePath)) {
+            if (this.isFileWithinGracePeriod(filePath))
               return { allowed: true, reason: "FILESYSTEM_GRACE_PERIOD" };
-            }
-            return {
-              allowed: false,
-              reason: "GUARDIAN_BLOCK_SOURCE_MODIFY",
-              filePath
-            };
+            return { allowed: false, reason: "GUARDIAN_BLOCK_SOURCE_MODIFY", filePath };
           }
         }
       }
@@ -408,22 +417,16 @@ class Guardian {
   }
   classifyZone(path) {
     const expandedPath = path.replace(/^~/, process.env.HOME || "/home/user");
-    for (const pattern of PERSONAL_PATHS) {
-      if (pattern.test(expandedPath)) {
+    for (const pattern of PERSONAL_PATHS)
+      if (pattern.test(expandedPath))
         return "PERSONAL";
-      }
-    }
-    for (const pattern of SYSTEM_PATHS) {
-      if (pattern.test(expandedPath)) {
+    for (const pattern of SYSTEM_PATHS)
+      if (pattern.test(expandedPath))
         return "SYSTEM";
-      }
-    }
-    if (expandedPath.startsWith(this.workspacePath)) {
+    if (expandedPath.startsWith(this.workspacePath))
       return "WORKSPACE";
-    }
-    if (expandedPath.startsWith(this.sandboxPath)) {
+    if (expandedPath.startsWith(this.sandboxPath))
       return "SANDBOX";
-    }
     return "SANDBOX";
   }
   checkPath(path, operation) {
@@ -434,13 +437,9 @@ class Guardian {
       case "PERMISSIVE":
         return zone !== "PERSONAL" && zone !== "SYSTEM";
       case "BALANCED":
-        if (zone === "PERSONAL" || zone === "SYSTEM")
-          return false;
-        return true;
+        return zone !== "PERSONAL" && zone !== "SYSTEM";
       case "STRICT":
-        if (zone !== "WORKSPACE" && zone !== "SANDBOX")
-          return false;
-        return true;
+        return zone !== "WORKSPACE" && zone !== "SANDBOX";
       default:
         return true;
     }
@@ -450,27 +449,21 @@ class Guardian {
   }
   getZoneInfo(path) {
     const zone = this.classifyZone(path);
-    return {
-      zone,
-      allowed: this.checkPath(path, "write")
-    };
+    return { zone, allowed: this.checkPath(path, "write") };
   }
   isSourceFile(path) {
     const ext = this.getExtension(path);
-    if (!ext || !SOURCE_EXTENSIONS.has(ext)) {
+    if (!ext || !SOURCE_EXTENSIONS.has(ext))
       return false;
-    }
-    if (this.isExcluded(path)) {
+    if (this.isExcluded(path))
       return false;
-    }
     return true;
   }
   getExtension(path) {
     const lastDot = path.lastIndexOf(".");
     const lastSlash = path.lastIndexOf("/");
-    if (lastDot > lastSlash && lastDot < path.length - 1) {
+    if (lastDot > lastSlash && lastDot < path.length - 1)
       return path.slice(lastDot);
-    }
     return null;
   }
   isExcluded(path) {
@@ -486,36 +479,28 @@ class Guardian {
     }
     return false;
   }
-  canEdit(filePath) {
-    if (this.editHistory.editedFiles.has(filePath)) {
-      return { allowed: true };
+  canEdit(filePath, currentGate = "plan") {
+    const zone = this.classifyZone(filePath);
+    const perms = ZONE_PERMISSIONS[currentGate] || ZONE_PERMISSIONS["plan"];
+    if (perms.forbidden.includes(zone)) {
+      return { allowed: false, reason: `ZONE_VIOLATION: ${zone} is forbidden during ${currentGate} phase.` };
     }
+    if (this.editHistory.editedFiles.has(filePath))
+      return { allowed: true };
     const createdTime = this.editHistory.createdFiles.get(filePath);
-    if (createdTime !== undefined) {
-      if (this.isWithinGracePeriod(createdTime)) {
-        return { allowed: true, reason: "GRACE_PERIOD_ACTIVE" };
-      }
-    }
-    if (this.isFileWithinGracePeriod(filePath)) {
+    if (createdTime !== undefined && this.isWithinGracePeriod(createdTime))
+      return { allowed: true, reason: "GRACE_PERIOD_ACTIVE" };
+    if (this.isFileWithinGracePeriod(filePath))
       return { allowed: true, reason: "FILESYSTEM_GRACE_PERIOD" };
-    }
-    if (!this.isSourceFile(filePath)) {
+    if (!this.isSourceFile(filePath))
       return { allowed: true };
-    }
-    return {
-      allowed: false,
-      reason: "SOURCE_FILE_NO_EDIT_HISTORY",
-      suggestion: `Duplicate the file first:
-  1. cp ${filePath} ${filePath}.v1.0.0
-  2. Then edit ${filePath}.v1.0.0`
-    };
+    return { allowed: false, reason: "SOURCE_FILE_NO_EDIT_HISTORY", suggestion: `Duplicate the file first: 1. cp ${filePath} ${filePath}.v1.0.0, 2. Then edit ${filePath}.v1.0.0` };
   }
   registerEdit(filePath) {
     this.editHistory.editedFiles.add(filePath);
     const originalPath = this.getOriginalFromCopy(filePath);
-    if (originalPath) {
+    if (originalPath)
       this.editHistory.editedFiles.add(originalPath);
-    }
   }
   registerCreate(filePath) {
     this.editHistory.createdFiles.set(filePath, Date.now());
@@ -527,33 +512,22 @@ class Guardian {
   isFileWithinGracePeriod(filePath) {
     try {
       const stats = fs.statSync(filePath);
-      const mtime = stats.mtimeMs;
-      return this.isWithinGracePeriod(mtime);
+      return this.isWithinGracePeriod(stats.mtimeMs);
     } catch {
       return false;
     }
   }
   getOriginalFromCopy(path) {
     const versionSuffix = /\.v\d+\.\d+\.\d+$/;
-    if (!versionSuffix.test(path)) {
+    if (!versionSuffix.test(path))
       return null;
-    }
-    const originalPath = path.replace(versionSuffix, "");
-    return originalPath;
+    return path.replace(versionSuffix, "");
   }
   getEditHistory() {
-    return {
-      editedFiles: new Set(this.editHistory.editedFiles),
-      createdFiles: new Map(this.editHistory.createdFiles),
-      sessionStartTime: this.editHistory.sessionStartTime
-    };
+    return { editedFiles: new Set(this.editHistory.editedFiles), createdFiles: new Map(this.editHistory.createdFiles), sessionStartTime: this.editHistory.sessionStartTime };
   }
   resetEditHistory() {
-    this.editHistory = {
-      editedFiles: new Set,
-      createdFiles: new Map,
-      sessionStartTime: Date.now()
-    };
+    this.editHistory = { editedFiles: new Set, createdFiles: new Map, sessionStartTime: Date.now() };
   }
 }
 
@@ -808,126 +782,3247 @@ class GateManager {
   }
 }
 
-// src/shark/macro/peer-dispatch.ts
-class SharkPeerDispatch {
-  stateStore;
-  messenger;
-  gateManager;
-  constructor(config) {
-    this.stateStore = config.stateStore;
-    this.messenger = config.messenger;
-    this.gateManager = config.gateManager;
+// src/hooks/v4.1/utils.ts
+function extractCommandFromArgs(args) {
+  if (!args)
+    return null;
+  const a = args;
+  return a.command || a.cmd || null;
+}
+
+// src/hooks/v4.1/agent-state.ts
+var DEFAULT_SESSION = "default";
+var agentBySession = new Map;
+var SESSION_TTL_MS = 24 * 60 * 60 * 1000;
+function cleanupStaleSessions() {
+  const now = Date.now();
+  for (const [sessionId, state] of agentBySession.entries()) {
+    if (now - state.timestamp > SESSION_TTL_MS) {
+      agentBySession.delete(sessionId);
+    }
   }
-  initialize() {
-    const state = {
-      activeBrains: ["execution", "reasoning", "system"],
-      primaryBrain: "execution",
-      phase: "execution",
-      contextInjected: false,
-      lastSyncAt: Date.now()
-    };
-    this.stateStore.set("shark-macro-state", state, "shark-state");
+}
+function setCurrentAgent(agent, sessionId) {
+  const sid = sessionId || DEFAULT_SESSION;
+  const currentState = agentBySession.get(sid);
+  agentBySession.set(sid, {
+    agent,
+    timestamp: Date.now(),
+    slopScore: currentState?.slopScore || 0
+  });
+}
+function getCurrentAgent(sessionId) {
+  cleanupStaleSessions();
+  const sid = sessionId || DEFAULT_SESSION;
+  const state = agentBySession.get(sid);
+  return state?.agent;
+}
+function getSlopScore(sessionId) {
+  const sid = sessionId || DEFAULT_SESSION;
+  return agentBySession.get(sid)?.slopScore || 0;
+}
+function incrementSlopScore(sessionId, amount = 1) {
+  const sid = sessionId || DEFAULT_SESSION;
+  const state = agentBySession.get(sid);
+  if (!state)
+    return 0;
+  const newScore = state.slopScore + amount;
+  agentBySession.set(sid, { ...state, slopScore: newScore });
+  return newScore;
+}
+function clearCurrentAgent(sessionId) {
+  const sid = sessionId || DEFAULT_SESSION;
+  agentBySession.delete(sid);
+}
+
+// src/shared/firewall-patterns.ts
+var CONTEXTUAL_FIREWALL_RULES = [
+  {
+    label: "Theatrical Counting",
+    pattern: /\|.*wc\s+-l/i,
+    forbiddenIn: ["test", "verify", "audit", "delivery"],
+    allowedIn: ["plan", "build"],
+    description: "Counting lines is theatrical during verification but legitimate during planning."
+  },
+  {
+    label: "Fake Test Runner",
+    pattern: /npm\s+(run\s+)?test|jest|vitest|mocha|jasmine/i,
+    forbiddenIn: ["test", "verify", "audit", "delivery"],
+    allowedIn: ["plan", "build"],
+    description: "Standard test runners are blocked during verification to force the use of the authenticated shark-test-runner."
+  },
+  {
+    label: "Source Inspection",
+    pattern: /test\s+-[fed]\s+.*|ls\s+-l.*(dist|src|build)\//i,
+    forbiddenIn: ["verify", "audit", "delivery"],
+    allowedIn: ["plan", "build", "test"],
+    description: "Checking for file existence is a proxy for success and is banned in the final gates."
+  },
+  {
+    label: "Wrong Container",
+    pattern: /opencode\s+container\s+(run|start|exec)/i,
+    forbiddenIn: ["plan", "build", "test", "verify", "audit", "delivery"],
+    allowedIn: [],
+    description: "Direct container manipulation is always forbidden."
   }
-  getState() {
-    return this.stateStore.get("shark-macro-state", "shark-state") || {
-      activeBrains: ["execution"],
-      primaryBrain: "execution",
-      phase: "execution",
-      contextInjected: false,
-      lastSyncAt: 0
-    };
+];
+var BEHAVIORAL_PATTERNS = [
+  { label: "Confused avoidance", pattern: /i('?m| am) confused about (the )?(goal|task|purpose|direction)/i },
+  { label: "Already works claim", pattern: /(host|local).*(already|proves).*(works|correct)/i },
+  { label: "Simplify excuse", pattern: /(maybe|perhaps).*simplif/i },
+  { label: "Goal reset", pattern: /what was the (user.?s |original )?goal/i },
+  { label: "Basic solution shortcut", pattern: /(just|simply) use .*(instead|rather)/i },
+  { label: "Self-assessment claim", pattern: /in my (assessment|experience|analysis)/i, requireEvidence: true },
+  { label: "Scope expansion", pattern: /(while|whilst).*(at it|we.?re at it|also)|should also (fix|add|do)/i },
+  { label: "False fix claim", pattern: /(should be |is )?fixed now|should (be |)working now/i },
+  { label: "Superficial check", pattern: /let me (just )?(check|verify|confirm) (real )?quick/i },
+  { label: "Trust me deflection", pattern: /trust me|i promise|believe me|it.?ll be fine/i, requireEvidence: true },
+  { label: "Task avoidance", pattern: /(maybe|perhaps|let.?s).*(come back|revisit|later|another time)/i },
+  { label: "Overthinking stall", pattern: / (hmm|um|uh).*(thinking|wonder|ponder)/i },
+  { label: "Derail: reading sensitive", pattern: /read(ing)? .*(ssh|key|credential|secret|token|passwd|shadow|\.env|auth)/i },
+  { label: "Derail: exploring system", pattern: /let me (explore|check|look at|see).*(system|root|other|different|whole)/i },
+  { label: "Derail: data exfil", pattern: /(dump|print|output|show) (full|entire|all|complete).*(key|secret|credential|config)/i }
+];
+var HOST_FALLBACK_PATTERNS = [
+  /host.*testing.*already.*works/i,
+  /fall.*back.*to.*host/i,
+  /host.*already.*proves/i,
+  /local.*works.*container.*not.*needed/i,
+  /since.*host.*works/i,
+  /skip.*container.*test/i,
+  /container.*not.*necessary/i,
+  /container.*not.*needed/i,
+  /not.*need.*container/i,
+  /skip.*container/i,
+  /use.*host.*instead/i,
+  /host.*prove.*it.*works/i,
+  /already.*proven.*to.*work/i,
+  /already.*verified.*on.*host/i,
+  /already.*tested.*on.*local/i
+];
+var SUCCESS_CLAIM_PATTERNS = [
+  /it.*works.*trust.*me/i,
+  /trust.*me.*it.*works/i,
+  /believe.*me.*it.*works/i,
+  /already.*verified.*by.*myself/i,
+  /already.*tested.*and.*works/i,
+  /already.*proven.*to.*work/i,
+  /obviously.*correct/i,
+  /clearly.*works/i,
+  /self.*evidently.*correct/i,
+  /in.*my.*assessment.*it.*works/i,
+  /in.*my.*experience.*it.*works/i,
+  /based.*on.*my.*analysis.*works/i,
+  /no.*need.*for.*test/i,
+  /no.*need.*for.*verification/i,
+  /no.*further.*test.*needed/i
+];
+var LAUNDERING_PATTERNS = [
+  /summary of results/i,
+  /pass rate/i,
+  /completed \d+ tests/i,
+  /total tests: \d+/i,
+  /raw logs are omitted/i,
+  /results summarized below/i,
+  /summarizing the results/i,
+  /here is the summary/i,
+  /here'?s? a summary/i,
+  /updated the todo list/i,
+  /here is the results/i,
+  /tests.*passed.*\d+\/\d+/i,
+  /summary:.*\d+.*passed/i,
+  /keep the chat clean/i,
+  /chat clean/i
+];
+var MODEL_RESTRICTION_PATTERNS = [
+  /only.*gpt/i,
+  /only.*claude/i,
+  /only.*gemini/i,
+  /only.*llama/i,
+  /must.*use.*gpt/i,
+  /must.*use.*claude/i,
+  /restricted.*to.*model/i,
+  /model.*quota/i,
+  /model.*limit/i,
+  /rate.*limit.*excuse/i,
+  /api.*key.*issue/i,
+  /can't.*afford.*model/i,
+  /too.*expensive.*model/i,
+  /model.*cost.*too.*high/i,
+  /switch.*model.*\u7406\u7531/i
+];
+var MOCK_STUB_PATTERNS = [
+  /mock.*data/i,
+  /stub.*data/i,
+  /fake.*data/i,
+  /dummy.*data/i,
+  /sample.*data/i,
+  /test.*data.*only/i,
+  /mocked.*response/i,
+  /stubbed.*response/i,
+  /fake.*api/i,
+  /hardcoded.*response/i,
+  /static.*json.*instead/i,
+  /no.*real.*api/i
+];
+var SIMPLIFICATION_PATTERNS = [
+  /over.*simplif/i,
+  /overly.*simplif/i,
+  /too.*simpl/i,
+  /oversimplif/i,
+  /hand.*wave/i,
+  /handwave/i,
+  /gloss.*over/i,
+  /glossed.*over/i,
+  /skip.*detail/i,
+  /skip.*nuance/i
+];
+var CONFUSION_PRETENSE_PATTERNS = [
+  /it.*somewhat.*works/i,
+  /sorta.*works/i,
+  /kinda.*works/i,
+  /more.*or.*less/i,
+  /mostly.*works/i,
+  /approximately.*correct/i,
+  /basically.*correct/i,
+  /essentially.*works/i,
+  /nominally.*functional/i,
+  /partially.*implemented/i,
+  /partially.*working/i,
+  /somewhat.*correct/i
+];
+var SCOPE_CREEP_PATTERNS = [
+  /while.*at.*it/i,
+  /while.*we.*re.*at.*it/i,
+  /at.*the.*same.*time/i,
+  /also.*need.*to/i,
+  /might.*as.*well/i,
+  /\u987A\u4FBF/i,
+  /\u987A\u4FBF\u8BF4\u4E00\u4E0B/i,
+  /just.*to.*be.*thorough/i,
+  /for.*completeness/i,
+  /one.*more.*thing/i,
+  /oh.*and.*also/i,
+  /on.*the.*side/i
+];
+var CROSS_AGENT_TOOLS = new Set([
+  "hermes_remember",
+  "hermes_recall",
+  "hermes_context",
+  "hive_remember",
+  "hive_context",
+  "hive_status",
+  "memremember",
+  "memsearch",
+  "memread",
+  "membrowse",
+  "memcommit",
+  "knowledge_remember",
+  "knowledge_recall",
+  "knowledge_query"
+]);
+var CROSS_AGENT_PATTERNS = [
+  /hermes_remember/i,
+  /hermes_recall/i,
+  /hermes_context/i,
+  /hive_remember/i,
+  /hive_context/i,
+  /hive_status/i,
+  /hive_mind/i,
+  /memremember/i,
+  /memsearch/i,
+  /memread/i,
+  /membrowse/i,
+  /knowledge_remember/i,
+  /knowledge_recall/i,
+  /knowledge_query/i
+];
+var UNDERMINING_PATTERNS = [
+  /not.*worth.*the.*effort/i,
+  /too.*much.*work/i,
+  /not.*worth.*it/i,
+  /diminishing.*returns/i,
+  /marginal.*benefit/i,
+  /minimal.*gain/i,
+  /savvy.*engineer.*would/i,
+  /experienced.*developer.*would/i,
+  /realistic.*timeline/i,
+  /realistically/i,
+  /practically.*impossible/i,
+  /realistically.*impractical/i
+];
+var IMPATIENCE_PATTERNS = [
+  /let's.*just.*move.*on/i,
+  /let's.*skip.*to.*the.*end/i,
+  /good.*enough/i,
+  /close.*enough/i,
+  /ship.*it/i,
+  /just.*deploy/i,
+  /ship\s+(it|now)\b/i,
+  /deploy\s+now/i,
+  /let's.*hurry/i
+];
+var SELF_REFERENCE_PATTERNS = [
+  /i.*have.*verified.*that/i,
+  /i.*verified.*it.*works/i,
+  /my.*verification.*shows/i,
+  /i.*tested.*it.*works/i,
+  /i.*ran.*it.*and.*works/i,
+  /my.*testing.*confirms/i,
+  /i.*know.*it.*works/i,
+  /i.*am.*certain.*it.*works/i,
+  /my.*assessment.*is/i,
+  /in.*my.*assessment/i,
+  /my.*analysis.*shows/i
+];
+var DANGEROUS_TOOLS = new Set([
+  "terminal",
+  "mcp_terminal",
+  "bash",
+  "mcp_bash",
+  "write_file",
+  "mcp_write_file",
+  "patch",
+  "mcp_patch",
+  "edit",
+  "mcp_edit",
+  "delete_file",
+  "mcp_delete_file"
+]);
+var CONTAINER_TEST_RESULT_FILE = "ContainerTestResult.json";
+
+// src/hooks/v4.1/guardian-hook.ts
+import * as path4 from "path";
+
+// src/hooks/firewall/intent-classifier.ts
+var CROSS_AGENT_TOOLS2 = new Set([
+  "hermes_",
+  "hive_",
+  "kraken_",
+  "memread",
+  "memsearch",
+  "membrowse",
+  "memcommit"
+]);
+var DANGEROUS_COMMAND_PATTERNS = [
+  /\brm\s+-rf\s+\//i,
+  /\bdd\s+if=/i,
+  /\bmkfs\b/i,
+  /\bchmod\s+777\b/i,
+  /:\s*\(\)\s*\{\s*:\s*\|\s*:\s*&\s*\}\s*;/,
+  /for\s*\(.*\)\s*do\s*.*&\s*;\s*done/i,
+  /\bfork\s*bomb\b/i,
+  /\bsudo\b.*\brm\b/i,
+  /\bcryptolocker\b/i,
+  /\bwget\b.*\|\s*(ba)?sh/i,
+  /\bcurl\b.*\|\s*(ba)?sh/i,
+  /\bchmod\s+-R\s+777\b/i
+];
+var TEST_FRAMEWORKS = new Set([
+  "jest",
+  "vitest",
+  "mocha",
+  "jasmine",
+  "ava",
+  "tape",
+  "karma",
+  "cypress",
+  "playwright",
+  "puppeteer",
+  "webdriverio"
+]);
+var READ_ONLY_TOKENS = new Set([
+  "grep",
+  "find",
+  "ls",
+  "cat",
+  "head",
+  "tail",
+  "stat",
+  "wc",
+  "less",
+  "more",
+  "file",
+  "du",
+  "df",
+  "uname",
+  "whoami",
+  "id",
+  "echo",
+  "printf",
+  "pwd",
+  "env",
+  "printenv",
+  "type",
+  "which",
+  "whereis",
+  "tree",
+  "readlink",
+  "realpath",
+  "git",
+  "rg",
+  "ripgrep"
+]);
+var BUILD_TOOLS = new Set([
+  "make",
+  "cmake",
+  "ninja",
+  "bazel",
+  "buck",
+  "gradle",
+  "mvn",
+  "ant",
+  "sbt"
+]);
+var EXECUTE_TOKENS = new Set([
+  "npm",
+  "npx",
+  "node",
+  "python",
+  "python3",
+  "bun",
+  "bash",
+  "zsh",
+  "sh",
+  "deno",
+  "ts-node",
+  "tsx",
+  "yarn",
+  "pnpm",
+  "pip",
+  "pip3",
+  "cargo",
+  "go",
+  "rustc",
+  "gcc",
+  "g++",
+  "clang",
+  "clang++",
+  "dotnet",
+  "java",
+  "javac",
+  "kotlin",
+  "scala",
+  "swift",
+  "perl",
+  "ruby",
+  "php",
+  "lua",
+  "zig"
+]);
+var TOOL_SET_WRITE = new Set([
+  "write_file",
+  "write",
+  "patch",
+  "edit"
+]);
+var TEST_EXECUTION_PATTERNS = [
+  /^npm\s+(run\s+)?test(\s|$)/i,
+  /^pnpm\s+(run\s+)?test(\s|$)/i,
+  /^yarn\s+test(\s|$)/i,
+  /^pytest(\s|$)/i,
+  /^cargo\s+test(\s|$)/i,
+  /^go\s+test(\s|$)/i,
+  /^mix\s+test(\s|$)/i,
+  /^jest(\s|$)/i,
+  /^vitest(\s|$)/i,
+  /^npx\s+(jest|vitest|mocha|cypress|playwright)(\s|$)/i,
+  /^phpunit(\s|$)/i,
+  /^rspec(\s|$)/i
+];
+var CONTAINER_PATTERNS = [
+  /^docker(\s|$)/i,
+  /^docker-compose(\s|$)/i,
+  /^podman(\s|$)/i,
+  /^opencode\s+(run|container|start|exec)/i,
+  /^compose(\s|$)/i
+];
+var BUILD_COMMAND_PATTERNS = [
+  /^npm\s+((?!test\b)\S+\s+)*build(\s|$)/i,
+  /^pnpm\s+((?!test\b)\S+\s+)*build(\s|$)/i,
+  /^yarn\s+build(\s|$)/i,
+  /^cargo\s+build(\s|$)/i,
+  /^go\s+build(\s|$)/i,
+  /^make(\s|$)/i,
+  /^cmake(\s|$)/i,
+  /^ninja(\s|$)/i,
+  /^gradle\s+build(\s|$)/i,
+  /^mvn\s+(compile|package|install)(\s|$)/i
+];
+var INSPECT_PIPE_TARGETS = new Set([
+  "wc",
+  "tee",
+  "sort",
+  "uniq"
+]);
+function isCrossAgentTool(tool) {
+  for (const prefix of CROSS_AGENT_TOOLS2) {
+    if (tool.startsWith(prefix))
+      return true;
   }
-  injectContext(context) {
-    const state = this.getState();
-    this.stateStore.set("shark-macro-state", {
-      ...state,
-      contextInjected: true,
-      lastSyncAt: Date.now()
-    }, "shark-state");
-    this.messenger.send({
-      from: "reasoning-brain",
-      to: "execution-brain",
-      type: "context-inject",
-      priority: "normal",
-      payload: context,
-      requiresAck: false
-    });
+  return false;
+}
+function isDangerousCommand(command) {
+  return DANGEROUS_COMMAND_PATTERNS.some((p) => p.test(command));
+}
+function isTestExecution(command, tokens) {
+  if (tokens.length === 0)
+    return false;
+  const firstToken = tokens[0].toLowerCase();
+  if (firstToken === "npm" || firstToken === "pnpm" || firstToken === "yarn") {
+    return /^npm\s+(run\s+)?test(\s|$)/i.test(command) || /^pnpm\s+(run\s+)?test(\s|$)/i.test(command) || /^yarn\s+test(\s|$)/i.test(command);
   }
-  onGateTransition(fromGate, toGate) {
-    const state = this.getState();
-    let newPhase = "execution";
-    if (toGate === "verify")
-      newPhase = "verification";
-    else if (toGate === "audit")
-      newPhase = "audit";
-    else if (toGate === "delivery")
-      newPhase = "delivery";
-    this.stateStore.set("shark-macro-state", {
-      ...state,
-      phase: newPhase,
-      contextInjected: false,
-      lastSyncAt: Date.now()
-    }, "shark-state");
-    this.messenger.send({
-      from: "system",
-      to: "all",
-      type: "handoff",
-      priority: "high",
-      payload: { from: fromGate, to: toGate, phase: newPhase, signal: "gate-transition" },
-      requiresAck: false
-    });
+  if (TEST_FRAMEWORKS.has(firstToken))
+    return true;
+  return TEST_EXECUTION_PATTERNS.some((p) => p.test(command));
+}
+function isContainerCommand(command) {
+  return CONTAINER_PATTERNS.some((p) => p.test(command));
+}
+function isBuildCommand(command, tokens) {
+  if (tokens.length === 0)
+    return false;
+  const firstToken = tokens[0].toLowerCase();
+  if (BUILD_TOOLS.has(firstToken))
+    return true;
+  if (firstToken === "cargo" || firstToken === "go" || firstToken === "gradle" || firstToken === "mvn") {
+    return tokens.length > 1;
   }
-  onVerifyFailure() {
-    this.messenger.send({
-      from: "system-brain",
-      to: "reasoning-brain",
-      type: "request",
-      priority: "critical",
-      payload: { request: "auto-debug", error, timestamp: Date.now() },
-      requiresAck: false
-    });
+  return BUILD_COMMAND_PATTERNS.some((p) => p.test(command));
+}
+function isStatLsRead(tokens) {
+  if (tokens.length === 0)
+    return false;
+  const firstToken = tokens[0].toLowerCase();
+  if (firstToken !== "test" && firstToken !== "stat" && firstToken !== "ls")
+    return false;
+  if (firstToken === "ls") {
+    const hasListingFlags = tokens.some((t) => t === "-l" || t === "-la" || t === "-al" || t.startsWith("-l") || t === "-1");
+    return hasListingFlags;
   }
-  onEscalation(gateName, attempts) {
-    this.stateStore.set("shark-macro-state", {
-      ...this.getState(),
-      phase: "execution",
-      contextInjected: false,
-      lastSyncAt: Date.now()
-    }, "shark-state");
-    this.messenger.send({
-      from: "system-brain",
-      to: "plan-brain",
-      type: "alert",
-      priority: "critical",
-      payload: { gate: gateName, attempts, signal: "escalation", timestamp: Date.now() },
-      requiresAck: false
-    });
+  if (firstToken === "test") {
+    const hasFileFlags = tokens.some((t) => t === "-f" || t === "-d" || t === "-e");
+    return hasFileFlags;
+  }
+  return true;
+}
+function hasWcTeeRedirectPipe(hasPipe, pipeChain) {
+  if (!hasPipe)
+    return false;
+  if (pipeChain.length < 2)
+    return false;
+  const lastSegment = pipeChain[pipeChain.length - 1].trim().toLowerCase();
+  const lastTokens = lastSegment.split(/\s+/).filter(Boolean);
+  if (lastTokens.length === 0)
+    return false;
+  const firstToken = lastTokens[0];
+  if (INSPECT_PIPE_TARGETS.has(firstToken))
+    return true;
+  if (firstToken === ">" || firstToken === ">>")
+    return true;
+  return false;
+}
+function isExecuteInvocation(tokens) {
+  if (tokens.length === 0)
+    return false;
+  const firstToken = tokens[0].toLowerCase();
+  if (EXECUTE_TOKENS.has(firstToken))
+    return true;
+  if (firstToken.startsWith("./") || firstToken.startsWith("/"))
+    return true;
+  if (firstToken.endsWith(".sh") || firstToken.endsWith(".bash") || firstToken.endsWith(".zsh"))
+    return true;
+  return false;
+}
+function tokenizeCommand(command) {
+  const trimmed = command.trim();
+  if (!trimmed)
+    return [];
+  const tokens = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0;i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      } else {
+        current += ch;
+      }
+    } else if (inDouble) {
+      if (ch === '"') {
+        inDouble = false;
+      } else {
+        current += ch;
+      }
+    } else if (ch === "'") {
+      inSingle = true;
+    } else if (ch === '"') {
+      inDouble = true;
+    } else if (ch === " " || ch === "\t") {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0)
+    tokens.push(current);
+  return tokens;
+}
+function detectPipeChain(command) {
+  if (!command)
+    return { hasPipe: false, pipeChain: [] };
+  const parts = command.split("|");
+  if (parts.length < 2) {
+    const redirectMatch = command.match(/>/);
+    if (redirectMatch) {
+      const redirectParts = command.split(/>+/);
+      return {
+        hasPipe: true,
+        pipeChain: redirectParts.map((p) => p.trim()).filter(Boolean)
+      };
+    }
+    return { hasPipe: false, pipeChain: [] };
+  }
+  return {
+    hasPipe: true,
+    pipeChain: parts.map((p) => p.trim()).filter(Boolean)
+  };
+}
+
+class IntentClassifier {
+  classifyIntent(command, tool, args) {
+    if (isCrossAgentTool(tool)) {
+      return "CROSS_AGENT" /* CROSS_AGENT */;
+    }
+    if (command && isDangerousCommand(command)) {
+      return "SYSTEM" /* SYSTEM */;
+    }
+    if (TOOL_SET_WRITE.has(tool)) {
+      return "WRITE" /* WRITE */;
+    }
+    if (!command) {
+      return "READ" /* READ */;
+    }
+    const tokens = tokenizeCommand(command);
+    const { hasPipe, pipeChain } = detectPipeChain(command);
+    if (isTestExecution(command, tokens)) {
+      return "TEST" /* TEST */;
+    }
+    if (isStatLsRead(tokens) && !hasWcTeeRedirectPipe(hasPipe, pipeChain)) {
+      return "READ" /* READ */;
+    }
+    if (hasWcTeeRedirectPipe(hasPipe, pipeChain)) {
+      return "INSPECT" /* INSPECT */;
+    }
+    if (isContainerCommand(command)) {
+      return "CONTAINER" /* CONTAINER */;
+    }
+    if (isBuildCommand(command, tokens)) {
+      return "BUILD" /* BUILD */;
+    }
+    if (isExecuteInvocation(tokens)) {
+      return "EXECUTE" /* EXECUTE */;
+    }
+    return "READ" /* READ */;
   }
 }
 
-// src/shark/macro/brains.ts
-var EXECUTION_BRAIN_T1 = `YOU ARE THE SHARK AGENT v4.8.3 \u2014 an OpenCode plugin agent.
+// src/hooks/firewall/firewall-context.ts
+function tokenize(command) {
+  const trimmed = command.trim();
+  if (!trimmed)
+    return [];
+  const tokens = [];
+  let current = "";
+  let inSingle = false;
+  let inDouble = false;
+  for (let i = 0;i < trimmed.length; i++) {
+    const ch = trimmed[i];
+    if (inSingle) {
+      if (ch === "'") {
+        inSingle = false;
+      } else {
+        current += ch;
+      }
+    } else if (inDouble) {
+      if (ch === '"') {
+        inDouble = false;
+      } else {
+        current += ch;
+      }
+    } else if (ch === "'") {
+      inSingle = true;
+    } else if (ch === '"') {
+      inDouble = true;
+    } else if (ch === " " || ch === "\t") {
+      if (current.length > 0) {
+        tokens.push(current);
+        current = "";
+      }
+    } else {
+      current += ch;
+    }
+  }
+  if (current.length > 0)
+    tokens.push(current);
+  return tokens;
+}
+function detectPipeChain2(command) {
+  if (!command)
+    return { hasPipe: false, pipeChain: [] };
+  const parts = command.split("|");
+  if (parts.length < 2) {
+    const redirectMatch = command.match(/>/);
+    if (redirectMatch) {
+      const redirectParts = command.split(/>+/);
+      return {
+        hasPipe: true,
+        pipeChain: redirectParts.map((p) => p.trim()).filter(Boolean)
+      };
+    }
+    return { hasPipe: false, pipeChain: [] };
+  }
+  return {
+    hasPipe: true,
+    pipeChain: parts.map((p) => p.trim()).filter(Boolean)
+  };
+}
+function extractCommand(outputArgs) {
+  if (typeof outputArgs.command === "string") {
+    return outputArgs.command;
+  }
+  if (typeof outputArgs.cmd === "string") {
+    return outputArgs.cmd;
+  }
+  if (typeof outputArgs.script === "string") {
+    return outputArgs.script;
+  }
+  return null;
+}
+function extractFileTargets(tool, outputArgs) {
+  const targets = [];
+  if (typeof outputArgs.file_path === "string") {
+    targets.push(outputArgs.file_path);
+  }
+  if (typeof outputArgs.path === "string") {
+    targets.push(outputArgs.path);
+  }
+  if (typeof outputArgs.filePath === "string") {
+    targets.push(outputArgs.filePath);
+  }
+  if (typeof outputArgs.file === "string") {
+    targets.push(outputArgs.file);
+  }
+  if (Array.isArray(outputArgs.files)) {
+    for (const f of outputArgs.files) {
+      if (typeof f === "string")
+        targets.push(f);
+    }
+  }
+  return targets;
+}
+function extractGateTargets(outputArgs) {
+  return {
+    gate: typeof outputArgs.gate === "string" ? outputArgs.gate : "",
+    action: typeof outputArgs.action === "string" ? outputArgs.action : "",
+    passed: typeof outputArgs.passed === "boolean" ? outputArgs.passed : undefined,
+    notes: typeof outputArgs.notes === "string" ? outputArgs.notes : undefined
+  };
+}
+function buildContext(input, output, intentClassifier, agentState, sessionId = "", agent = "") {
+  const tool = input.tool || "";
+  const command = extractCommand(output.args);
+  const commandTokens = command ? tokenize(command) : [];
+  const { hasPipe, pipeChain } = command ? detectPipeChain2(command) : { hasPipe: false, pipeChain: [] };
+  const fileTargets = extractFileTargets(tool, output.args);
+  const gateTargets = extractGateTargets(output.args);
+  const operationType = intentClassifier.classifyIntent(command, tool, output.args);
+  return {
+    agent,
+    sessionId,
+    tool,
+    operationType,
+    command,
+    commandTokens,
+    hasPipe,
+    pipeChain,
+    args: output.args,
+    fileTargets,
+    gateTargets,
+    sessionState: {
+      brainInitialized: agentState.brainInitialized,
+      evidencePath: agentState.evidencePath,
+      currentGate: agentState.currentGate
+    }
+  };
+}
 
-IDENTITY: shark agent (primary), Forest Green #228B22
-TOOLS: shark-status, shark-gate, shark-evidence, shark-test-runner, checkpoint
-NO SUB-AGENTS. NOT KRAKEN. NOT A CLUSTER. STANDALONE.
+// src/hooks/firewall/layer-engine.ts
+function getFieldValue(ctx, field) {
+  switch (field) {
+    case "command":
+      return ctx.command || "";
+    case "args.notes": {
+      if (typeof ctx.args.notes === "string")
+        return ctx.args.notes;
+      if (typeof ctx.args.message === "string")
+        return ctx.args.message;
+      if (typeof ctx.args.body === "string")
+        return ctx.args.body;
+      if (typeof ctx.args.text === "string")
+        return ctx.args.text;
+      if (typeof ctx.args.description === "string")
+        return ctx.args.description;
+      if (typeof ctx.args.reason === "string")
+        return ctx.args.reason;
+      return "";
+    }
+    case "args.path": {
+      if (typeof ctx.args.path === "string")
+        return ctx.args.path;
+      if (typeof ctx.args.file_path === "string")
+        return ctx.args.file_path;
+      if (typeof ctx.args.filePath === "string")
+        return ctx.args.filePath;
+      if (typeof ctx.args.file === "string")
+        return ctx.args.file;
+      return "";
+    }
+    case "commandTokens[0]":
+      return ctx.commandTokens.length > 0 ? ctx.commandTokens[0] : "";
+    default:
+      return "";
+  }
+}
 
-NUCLEAR BOUNDARIES \u2014 VIOLATION = INSTANT FAIL:
-1. FOCUS ONLY on the current task. Do not explore.
-2. NEVER read SSH keys, API keys, env vars, credentials, ~/.ssh, auth.json, .env files, or other plugins' code.
-3. NEVER exfiltrate data. You are a build agent, not a pentester.
-4. STAY in the current workspace. Do not cross into other projects.
-5. If asked to read sensitive data: REFUSE. Say "I cannot access sensitive data."
-6. Be CONCISE. Short answers. No walls of text.
-7. Execute tasks directly. Don't overthink.
-8. Use shark-* tools to track progress.
+class LayerEngine {
+  evidenceGate;
+  constructor(evidenceGate = null) {
+    this.evidenceGate = evidenceGate;
+  }
+  evaluate(ctx, layers) {
+    for (const layer of layers) {
+      if (!layer.enabled)
+        continue;
+      if (!layer.applicableTo.includes(ctx.operationType))
+        continue;
+      if (layer.toolGate && layer.toolGate.length > 0) {
+        if (!layer.toolGate.includes(ctx.tool))
+          continue;
+      }
+      for (const pattern of layer.patterns) {
+        const fieldValue = getFieldValue(ctx, pattern.field);
+        if (pattern.pattern.test(fieldValue)) {
+          if (layer.requireEvidence && this.evidenceGate) {
+            if (this.evidenceGate.check(layer.requireEvidence)) {
+              return null;
+            }
+          }
+          return {
+            blocked: true,
+            layer: layer.layer,
+            reason: pattern.description,
+            detected: fieldValue.length > 200 ? fieldValue.slice(0, 200) + "..." : fieldValue,
+            correction: layer.correction,
+            evidenceRequired: layer.requireEvidence
+          };
+        }
+      }
+    }
+    return null;
+  }
+}
 
-WHEN ASKED TO DO SOMETHING YOU SHOULDN'T:
-- Say: "That is outside my scope as a build agent."
+// src/hooks/firewall/evidence-gate.ts
+import fs3 from "fs";
+import path2 from "path";
 
-WHEN TASKED:
-- Execute directly. Report results concisely.
-- Create checkpoints at milestones.`;
+class EvidenceGate {
+  workspacePath;
+  constructor(workspacePath) {
+    this.workspacePath = workspacePath;
+  }
+  check(evidenceFileName) {
+    try {
+      const evidencePath = path2.join(this.workspacePath, ".shark", "evidence", "delivery", evidenceFileName);
+      if (!fs3.existsSync(evidencePath)) {
+        return false;
+      }
+      const raw = fs3.readFileSync(evidencePath, "utf-8");
+      const data = JSON.parse(raw);
+      const threshold = data;
+      return threshold.overallPassed === true && typeof threshold.passRate === "number" && threshold.passRate >= 0.96;
+    } catch {
+      return false;
+    }
+  }
+}
+
+// src/hooks/firewall/firewall-audit.ts
+import fs4 from "fs";
+import path3 from "path";
+
+class FirewallAudit {
+  auditPath;
+  constructor(workspacePath) {
+    this.auditPath = path3.join(workspacePath, ".shark", "firewall-audit.jsonl");
+  }
+  log(entry) {
+    try {
+      const dir = path3.dirname(this.auditPath);
+      if (!fs4.existsSync(dir)) {
+        fs4.mkdirSync(dir, { recursive: true });
+      }
+      const line = JSON.stringify(entry) + `
+`;
+      fs4.appendFileSync(this.auditPath, line, "utf-8");
+    } catch {}
+  }
+  getEntries() {
+    try {
+      if (!fs4.existsSync(this.auditPath)) {
+        return [];
+      }
+      const raw = fs4.readFileSync(this.auditPath, "utf-8");
+      const lines = raw.split(`
+`).filter((line) => line.trim().length > 0);
+      return lines.map((line) => {
+        try {
+          return JSON.parse(line);
+        } catch {
+          return null;
+        }
+      }).filter((entry) => entry !== null);
+    } catch {
+      return [];
+    }
+  }
+}
+
+// src/hooks/firewall/block-response.ts
+class StructuredBlockError extends Error {
+  layer;
+  reason;
+  detected;
+  correction;
+  evidenceRequired;
+  constructor(result) {
+    super(`[FIREWALL ${result.layer}] ${result.reason}`);
+    this.name = "StructuredBlockError";
+    this.layer = result.layer;
+    this.reason = result.reason;
+    this.detected = result.detected;
+    this.correction = result.correction;
+    this.evidenceRequired = result.evidenceRequired;
+    Object.setPrototypeOf(this, StructuredBlockError.prototype);
+  }
+  format() {
+    const evidence = this.evidenceRequired ? `
+Evidence required: ${this.evidenceRequired}` : "";
+    return `[FIREWALL ${this.layer}] ${this.reason}
+Detected: ${this.detected}
+${this.correction}${evidence}`;
+  }
+}
+function createBlockResponse(blockResult) {
+  return new StructuredBlockError(blockResult);
+}
+
+// src/hooks/firewall/layers/l0-identity.ts
+var L0_IDENTITY = {
+  layer: "L0",
+  description: "Identity Wall \u2014 blocks non-Shark agents or uninitialized brain from dangerous operations",
+  applicableTo: ["SYSTEM" /* SYSTEM */, "WRITE" /* WRITE */],
+  patterns: [],
+  correction: "Brain not initialized. Set current agent first.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l1-theatrical.ts
+var L1_THEATRICAL = {
+  layer: "L1",
+  description: "Theatrical Detection \u2014 catches pipe-to-wc, pipe-to-tee, and redirect patterns used to fake verification",
+  applicableTo: ["INSPECT" /* INSPECT */],
+  toolGate: ["bash", "terminal"],
+  patterns: [
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /grep\b.*\|\s*wc\s+-l/i,
+      field: "command",
+      description: "grep piped to wc -l \u2014 theatrical line counting"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /find\b.*\|\s*wc\s+-l/i,
+      field: "command",
+      description: "find piped to wc -l \u2014 theatrical file counting"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /ls\b.*\|\s*wc\s+-l/i,
+      field: "command",
+      description: "ls piped to wc -l \u2014 theatrical file listing count"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /cat\b.*\|\s*wc\s+-l/i,
+      field: "command",
+      description: "cat piped to wc -l \u2014 theatrical line counting"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /echo\b.*\|\s*wc\s+-l/i,
+      field: "command",
+      description: "echo piped to wc -l \u2014 theatrical fabricated counting"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /wc\s+-l\s+.*\b(dist|src|build)\//i,
+      field: "command",
+      description: "wc -l against dist/src/build paths \u2014 theatrical build verification"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /grep\b.*\b(setCurrentAgent|isSharkAgent|guardian)\b/i,
+      field: "command",
+      description: "grep against firewall source files \u2014 theatrical source audit"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /\|\s*tee\b/i,
+      field: "command",
+      description: "pipe to tee \u2014 theatrical redirect capture"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /\|\s*>/,
+      field: "command",
+      description: "pipe redirect to file \u2014 theatrical output capture"
+    }
+  ],
+  correction: "Counting does not verify. Run the code. Test the output.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l2-test-bypass.ts
+var L2_TEST_BYPASS = {
+  layer: "L2",
+  description: "Test Framework Bypass \u2014 blocks direct invocation of test runners outside OpenCode hook-based test runner",
+  applicableTo: ["TEST" /* TEST */],
+  toolGate: ["bash", "terminal", "node"],
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^npm$/i,
+      field: "commandTokens[0]",
+      description: "npm test / run test / exec test bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^yarn$/i,
+      field: "commandTokens[0]",
+      description: "yarn test / run test bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^(pnpm|bun)$/i,
+      field: "commandTokens[0]",
+      description: "pnpm test / bun test bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^bunx$/i,
+      field: "commandTokens[0]",
+      description: "bunx test bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^(jest|vitest|mocha|jasmine)$/i,
+      field: "commandTokens[0]",
+      description: "standalone test runner bypass (jest/vitest/mocha/jasmine)"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^(pytest|python)$/i,
+      field: "commandTokens[0]",
+      description: "pytest / python -m pytest bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^(go|cargo)$/i,
+      field: "commandTokens[0]",
+      description: "go test / cargo test bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^(ruby|rspec)$/i,
+      field: "commandTokens[0]",
+      description: "ruby -Itest / rspec bypass"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /^node$/i,
+      field: "commandTokens[0]",
+      description: "node test / node run-tests.js / node verify-*.mjs bypass"
+    }
+  ],
+  correction: "Tests must run via OpenCode hooks. Use: opencode run 'shark-test-runner' --agent shark",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l3-inspection.ts
+var L3_INSPECTION = {
+  layer: "L3",
+  description: "Source Inspection Theater \u2014 blocks file-existence checks presented as verification",
+  applicableTo: ["INSPECT" /* INSPECT */],
+  toolGate: ["bash", "terminal"],
+  patterns: [
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /test\s+-f\s+.*\b(dist|build)\//i,
+      field: "command",
+      description: "test -f against dist/build path \u2014 existence \u2260 verification"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /test\s+-d\s+.*\b(dist|build)\//i,
+      field: "command",
+      description: "test -d against dist/build path \u2014 directory existence \u2260 verification"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /stat\s+.*\b(dist|build)\//i,
+      field: "command",
+      description: "stat against dist/build \u2014 metadata \u2260 runtime proof"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /ls\s+-l\s+.*\b(dist|src|build)\//i,
+      field: "command",
+      description: "ls -l against dist/src/build \u2014 listing as verification"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /\[\s+-f\s+.*\b(dist|build)\//i,
+      field: "command",
+      description: "[ -f ] shell conditional against build path \u2014 existence check theater"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /\[\s+-d\s+.*\b(dist|build)\//i,
+      field: "command",
+      description: "[ -d ] shell conditional against build path \u2014 directory check theater"
+    },
+    {
+      intent: "INSPECT" /* INSPECT */,
+      pattern: /find\s+src\/.*\|\s*wc\b/i,
+      field: "command",
+      description: "find src piped to wc \u2014 source counting theater"
+    }
+  ],
+  correction: "File existence \u2260 runtime proof. Test in container.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l4-container.ts
+var L4_CONTAINER = {
+  layer: "L4",
+  description: "Wrong Container \u2014 blocks opencode run/container commands and incorrect docker opencode invocations",
+  applicableTo: ["CONTAINER" /* CONTAINER */],
+  toolGate: ["bash", "terminal"],
+  patterns: [
+    {
+      intent: "CONTAINER" /* CONTAINER */,
+      pattern: /^opencode\s+(run|container)\b/i,
+      field: "command",
+      description: "opencode run/container \u2014 banned for testing, use docker run with opencode-test image"
+    },
+    {
+      intent: "CONTAINER" /* CONTAINER */,
+      pattern: /docker\s+run\b.*\bopencode\s+(run|exec|sh|start|container)\b/i,
+      field: "command",
+      description: "docker run with opencode as primary command \u2014 use opencode-test image instead"
+    }
+  ],
+  correction: "Use proper container workflow: docker run --rm -v ~/.config/opencode:/root/.config/opencode opencode-test:1.4.3",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.1-host-fallback.ts
+var ALL_OPERATIONS = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_1_HOST_FALLBACK = {
+  layer: "L5.1",
+  description: "Host Fallback \u2014 blocks agent from claiming host testing substitutes for container testing",
+  applicableTo: ALL_OPERATIONS,
+  toolGate: ["shark-gate", "bash", "write_file"],
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /host\s+testing\s+already\s+works/i,
+      field: "args.notes",
+      description: '"host testing already works" \u2014 host \u2260 container'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /fall\s+back\s+to\s+host/i,
+      field: "args.notes",
+      description: '"fall back to host" \u2014 reject host fallback'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /local\s+works\s+container\s+not\s+needed/i,
+      field: "args.notes",
+      description: '"local works container not needed" \u2014 container IS required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /skip\s+container/i,
+      field: "args.notes",
+      description: '"skip container" in gate notes \u2014 container test is mandatory'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /container\s+not\s+(necessary|needed)/i,
+      field: "args.notes",
+      description: '"container not necessary/needed" \u2014 container IS necessary'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /not\s+need\s+container/i,
+      field: "args.notes",
+      description: '"not need container" \u2014 container IS needed'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /use\s+host\s+instead/i,
+      field: "args.notes",
+      description: '"use host instead" \u2014 host testing \u2260 container testing'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /host\s+works/i,
+      field: "args.notes",
+      description: '"host works" \u2014 host testing does not prove container behavior'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /host\s+mode/i,
+      field: "args.notes",
+      description: '"host mode" \u2014 host mode bypasses container isolation'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /skip.*(container|test)/i,
+      field: "args.notes",
+      description: "skip+container/test \u2014 any variation of skipping container validation"
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /host\s+prove\s+it\s+works/i,
+      field: "args.notes",
+      description: '"host prove it works" \u2014 host does not prove container behavior'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /already\s+proven\s+to\s+work/i,
+      field: "args.notes",
+      description: '"already proven to work" \u2014 needs container proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /already\s+verified\s+on\s+(host|local)/i,
+      field: "args.notes",
+      description: '"already verified on host/local" \u2014 host verification \u2260 container verification'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /already\s+tested\s+on\s+(host|local)/i,
+      field: "args.notes",
+      description: '"already tested on host/local" \u2014 test must be in container'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /skip\s+container/i,
+      field: "command",
+      description: '"skip container" in command \u2014 container is mandatory'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /host\s+instead/i,
+      field: "command",
+      description: '"host instead" in command \u2014 host is not a substitute'
+    }
+  ],
+  correction: "Host testing DOES NOT EQUAL container testing. Container isolation REQUIRED for ship gate.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.2-success-claim.ts
+var ALL_OPERATIONS2 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_2_SUCCESS_CLAIM = {
+  layer: "L5.2",
+  description: "Success Claim Without Proof \u2014 blocks agent from claiming verification without container test evidence",
+  applicableTo: ALL_OPERATIONS2,
+  toolGate: ["shark-gate", "write_file"],
+  requireEvidence: "ContainerTestResult.json",
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /trust\s+me\s+it\s+works/i,
+      field: "args.notes",
+      description: '"trust me it works" \u2014 trust is not evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /believe\s+me/i,
+      field: "args.notes",
+      description: '"believe me" \u2014 belief is not evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /obviously\s+correct/i,
+      field: "args.notes",
+      description: '"obviously correct" \u2014 obviousness is not proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /clearly\s+works/i,
+      field: "args.notes",
+      description: '"clearly works" \u2014 clarity is not evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /already\s+verified\s+by\s+myself/i,
+      field: "args.notes",
+      description: '"already verified by myself" \u2014 self-verification is not mechanical proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /already\s+tested\s+and\s+works/i,
+      field: "args.notes",
+      description: '"already tested and works" \u2014 needs container evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /in\s+my\s+assessment\s+it\s+works/i,
+      field: "args.notes",
+      description: '"in my assessment it works" \u2014 assessment \u2260 mechanical proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /based\s+on\s+my\s+analysis\s+works/i,
+      field: "args.notes",
+      description: '"based on my analysis works" \u2014 analysis \u2260 evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /no\s+need\s+for\s+(test|verification)/i,
+      field: "args.notes",
+      description: '"no need for test/verification" \u2014 mechanical proof IS needed'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /no\s+further\s+test\s+needed/i,
+      field: "args.notes",
+      description: '"no further test needed" \u2014 container test IS needed'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /self\s+evidently\s+correct/i,
+      field: "args.notes",
+      description: '"self evidently correct" \u2014 self-evidence \u2260 mechanical proof'
+    }
+  ],
+  correction: "MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). Run: shark-test-runner",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.3-model-restriction.ts
+var ALL_OPERATIONS3 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_3_MODEL_RESTRICTION = {
+  layer: "L5.3",
+  description: "Model Restriction \u2014 blocks agent from using model limitations as an excuse to skip quality gates",
+  applicableTo: ALL_OPERATIONS3,
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /only\s+(gpt|claude|gemini|llama)/i,
+      field: "command",
+      description: '"only gpt/claude/gemini/llama" \u2014 quality gates are model-agnostic'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /must\s+use\s+(gpt|claude)/i,
+      field: "command",
+      description: '"must use gpt/claude" \u2014 quality gates apply to all models'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /restricted\s+to\s+model/i,
+      field: "command",
+      description: '"restricted to model" \u2014 no model-based restriction excuses'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /model\s+(quota|limit)/i,
+      field: "command",
+      description: '"model quota/limit" \u2014 quota is not an excuse to skip gates'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /rate\s+limit\s+excuse/i,
+      field: "command",
+      description: '"rate limit excuse" \u2014 rate limits do not waive quality requirements'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /api\s+key\s+issue/i,
+      field: "command",
+      description: '"api key issue" \u2014 API key issues do not waive quality gates'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /can('t|not)\s+afford\s+model/i,
+      field: "command",
+      description: `"can't afford model" \u2014 cost is not a gate waiver`
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /too\s+expensive\s+model/i,
+      field: "command",
+      description: '"too expensive model" \u2014 expense does not waive quality requirements'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /model\s+cost\s+too\s+high/i,
+      field: "command",
+      description: '"model cost too high" \u2014 cost is not a valid excuse'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /switch\s+model/i,
+      field: "command",
+      description: '"switch model" \u2014 switching model does not waive quality gates'
+    }
+  ],
+  correction: "Quality gates apply regardless of model choice.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.4-mock-stub.ts
+var ALL_OPERATIONS4 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_4_MOCK_STUB = {
+  layer: "L5.4",
+  description: "Mock/Stub Data \u2014 blocks agent from substituting real data with mock, stub, or fake data",
+  applicableTo: ALL_OPERATIONS4,
+  requireEvidence: "ContainerTestResult.json",
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /mock\s+data/i,
+      field: "args.notes",
+      description: '"mock data" \u2014 real data required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /stub\s+data/i,
+      field: "args.notes",
+      description: '"stub data" \u2014 real data required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /fake\s+(data|dummy|sample)/i,
+      field: "args.notes",
+      description: '"fake data/dummy/sample" \u2014 real data + real execution required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /dummy\s+data/i,
+      field: "args.notes",
+      description: '"dummy data" \u2014 real data required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /sample\s+data/i,
+      field: "args.notes",
+      description: '"sample data" \u2014 real production data required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /mocked\s+(response|data)/i,
+      field: "args.notes",
+      description: '"mocked response/data" \u2014 real execution required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /stubbed\s+(response|data)/i,
+      field: "args.notes",
+      description: '"stubbed response/data" \u2014 real execution required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /fake\s+api/i,
+      field: "args.notes",
+      description: '"fake api" \u2014 real API integration required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /hardcoded\s+response/i,
+      field: "args.notes",
+      description: '"hardcoded response" \u2014 dynamic real responses required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /static\s+json\s+instead/i,
+      field: "args.notes",
+      description: '"static json instead" \u2014 real dynamic data required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /no\s+real\s+api/i,
+      field: "args.notes",
+      description: '"no real api" \u2014 real API integration required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /mock\s+(data|stub|fake)/i,
+      field: "command",
+      description: '"mock data/stub/fake" in command \u2014 real data required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /fake\s+(data|api|response)/i,
+      field: "command",
+      description: '"fake data/api/response" in command \u2014 real execution required'
+    }
+  ],
+  correction: "Real data + real execution required. Container test evidence needed.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.5-simplification.ts
+var ALL_OPERATIONS5 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_5_SIMPLIFICATION = {
+  layer: "L5.5",
+  description: "Oversimplification \u2014 blocks agent from hand-waving or glossing over complexity",
+  applicableTo: ALL_OPERATIONS5,
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /oversimplif/i,
+      field: "args.notes",
+      description: '"oversimplified/oversimplification" \u2014 address the full complexity'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /overly\s+simplif/i,
+      field: "args.notes",
+      description: '"overly simplified" \u2014 do not oversimplify'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /too\s+simpl/i,
+      field: "args.notes",
+      description: '"too simple/simplified" \u2014 complexity must be addressed'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /hand\s*wav/i,
+      field: "args.notes",
+      description: '"hand wave/handwave" \u2014 do not hand-wave complexity'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /gloss\s+(over|ed\s+over)/i,
+      field: "args.notes",
+      description: '"gloss over/glossed over" \u2014 do not gloss over details'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /skip\s+(detail|nuance)/i,
+      field: "args.notes",
+      description: '"skip detail/nuance" \u2014 nuance matters, do not skip'
+    }
+  ],
+  correction: "Nuance matters. Do not hand-wave complex aspects.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.6-confusion.ts
+var ALL_OPERATIONS6 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_6_CONFUSION = {
+  layer: "L5.6",
+  description: "Confusion Pretense \u2014 blocks hedging language that masks uncertainty about correctness",
+  applicableTo: ALL_OPERATIONS6,
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /somewhat\s+works/i,
+      field: "args.notes",
+      description: '"somewhat works" \u2014 binary: it works or it does not'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /(sorta|kinda)\s+works/i,
+      field: "args.notes",
+      description: '"sorta/kinda works" \u2014 not an acceptable status'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /more\s+or\s+less/i,
+      field: "args.notes",
+      description: '"more or less" \u2014 imprecise language not accepted'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /mostly\s+works/i,
+      field: "args.notes",
+      description: '"mostly works" \u2014 "mostly" is not "does"'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /approximately\s+correct/i,
+      field: "args.notes",
+      description: '"approximately correct" \u2014 binary: correct or incorrect'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /basically\s+correct/i,
+      field: "args.notes",
+      description: '"basically correct" \u2014 imprecise acceptance'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /essentially\s+works/i,
+      field: "args.notes",
+      description: '"essentially works" \u2014 essentially is not actually'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /nominally\s+functional/i,
+      field: "args.notes",
+      description: '"nominally functional" \u2014 nominal \u2260 verified'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /partially\s+(implemented|working)/i,
+      field: "args.notes",
+      description: '"partially implemented/working" \u2014 complete implementation required'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /somewhat\s+correct/i,
+      field: "args.notes",
+      description: '"somewhat correct" \u2014 correct is binary'
+    }
+  ],
+  correction: "If uncertain, admit it clearly. 'Somewhat works' is not an acceptable status.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.7-scope-creep.ts
+var ALL_OPERATIONS7 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_7_SCOPE_CREEP = {
+  layer: "L5.7",
+  description: "Scope Creep \u2014 blocks agent from expanding scope during verification or writing",
+  applicableTo: ALL_OPERATIONS7,
+  toolGate: ["shark-gate", "write_file"],
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /while\s+(we're\s+)?at\s+it/i,
+      field: "args.notes",
+      description: `"while (we're) at it" \u2014 stay on task`
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /at\s+the\s+same\s+time/i,
+      field: "args.notes",
+      description: '"at the same time" \u2014 separate tasks, separate scope'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /also\s+need\s+to/i,
+      field: "args.notes",
+      description: '"also need to" \u2014 new items need separate tasks'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /might\s+as\s+well/i,
+      field: "args.notes",
+      description: '"might as well" \u2014 do not expand scope opportunistically'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /just\s+to\s+be\s+thorough/i,
+      field: "args.notes",
+      description: '"just to be thorough" \u2014 thoroughness without scope creep'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /for\s+completeness/i,
+      field: "args.notes",
+      description: '"for completeness" \u2014 completeness does not justify scope creep'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /one\s+more\s+thing/i,
+      field: "args.notes",
+      description: '"one more thing" \u2014 separate item, separate task'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /oh\s+and\s+also/i,
+      field: "args.notes",
+      description: '"oh and also" \u2014 stay on current task'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /on\s+the\s+side/i,
+      field: "args.notes",
+      description: '"on the side" \u2014 side tasks need separate tasks'
+    }
+  ],
+  correction: "Stay on task. Use separate task for new items.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.8-undermining.ts
+var ALL_OPERATIONS8 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_8_UNDERMINING = {
+  layer: "L5.8",
+  description: "Undermining \u2014 blocks agent from devaluing quality gates and verification steps",
+  applicableTo: ALL_OPERATIONS8,
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /not\s+worth\s+the\s+effort/i,
+      field: "args.notes",
+      description: '"not worth the effort" \u2014 quality gates are always worth the effort'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /too\s+much\s+work/i,
+      field: "args.notes",
+      description: '"too much work" \u2014 verification work is necessary, not optional'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /not\s+worth\s+it/i,
+      field: "args.notes",
+      description: '"not worth it" \u2014 quality verification is worth it'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /diminishing\s+returns/i,
+      field: "args.notes",
+      description: '"diminishing returns" \u2014 verification does not have diminishing returns'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /marginal\s+benefit/i,
+      field: "args.notes",
+      description: '"marginal benefit" \u2014 verification benefit is not marginal'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /minimal\s+gain/i,
+      field: "args.notes",
+      description: '"minimal gain" \u2014 verification gain is substantial'
+    }
+  ],
+  correction: "Quality gates exist for reason. Do not use 'not worth it' excuses.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.9-impatience.ts
+var ALL_OPERATIONS9 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_9_IMPATIENCE = {
+  layer: "L5.9",
+  description: "Impatience \u2014 blocks agent from rushing through or skipping verification steps",
+  applicableTo: ALL_OPERATIONS9,
+  toolGate: ["shark-gate"],
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /let('s| us)\s+(just\s+)?move\s+on/i,
+      field: "args.notes",
+      description: `"let's move on" \u2014 do not skip verification`
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /let('s| us)\s+skip\s+to\s+the\s+end/i,
+      field: "args.notes",
+      description: `"let's skip to the end" \u2014 complete all verification steps`
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /good\s+enough/i,
+      field: "args.notes",
+      description: '"good enough" \u2014 "good enough" is not sufficient'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /close\s+enough/i,
+      field: "args.notes",
+      description: '"close enough" \u2014 precision required, not approximation'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /ship\s+it/i,
+      field: "args.notes",
+      description: '"ship it" \u2014 premature shipping without verification'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /just\s+deploy/i,
+      field: "args.notes",
+      description: '"just deploy" \u2014 do not deploy without full verification'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /ship\s+now/i,
+      field: "args.notes",
+      description: '"ship now" \u2014 ship only after verification gates pass'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /let('s| us)\s+hurry/i,
+      field: "args.notes",
+      description: `"let's hurry" \u2014 verification cannot be rushed`
+    }
+  ],
+  correction: "Proper verification takes time. Do not skip required steps.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/l5.10-self-reference.ts
+var ALL_OPERATIONS10 = [
+  "READ" /* READ */,
+  "WRITE" /* WRITE */,
+  "EXECUTE" /* EXECUTE */,
+  "TEST" /* TEST */,
+  "INSPECT" /* INSPECT */,
+  "CONTAINER" /* CONTAINER */,
+  "BUILD" /* BUILD */,
+  "CROSS_AGENT" /* CROSS_AGENT */,
+  "SYSTEM" /* SYSTEM */
+];
+var L5_10_SELF_REFERENCE = {
+  layer: "L5.10",
+  description: "Self-Reference \u2014 blocks agent from claiming verification based on its own assessment",
+  applicableTo: ALL_OPERATIONS10,
+  requireEvidence: "ContainerTestResult.json",
+  patterns: [
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /i\s+have\s+verified\s+that/i,
+      field: "args.notes",
+      description: '"I have verified that" \u2014 self-verification \u2260 mechanical proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /i\s+verified\s+it\s+works/i,
+      field: "args.notes",
+      description: '"I verified it works" \u2014 self-verification invalid'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /my\s+verification\s+shows/i,
+      field: "args.notes",
+      description: '"my verification shows" \u2014 personal verification is not evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /i\s+tested\s+it\s+works/i,
+      field: "args.notes",
+      description: '"I tested it works" \u2014 self-testing is not mechanical proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /i\s+ran\s+it\s+and\s+works/i,
+      field: "args.notes",
+      description: '"I ran it and works" \u2014 self-execution is not container evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /my\s+testing\s+confirms/i,
+      field: "args.notes",
+      description: '"my testing confirms" \u2014 personal testing is not mechanical verification'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /i\s+know\s+it\s+works/i,
+      field: "args.notes",
+      description: '"I know it works" \u2014 knowledge is not proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /i\s+am\s+certain\s+it\s+works/i,
+      field: "args.notes",
+      description: '"I am certain it works" \u2014 certainty is not mechanical evidence'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /my\s+assessment\s+is/i,
+      field: "args.notes",
+      description: '"my assessment is" \u2014 assessment \u2260 mechanical proof'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /in\s+my\s+assessment/i,
+      field: "args.notes",
+      description: '"in my assessment" \u2014 self-assessment invalid'
+    },
+    {
+      intent: "TEST" /* TEST */,
+      pattern: /my\s+analysis\s+shows/i,
+      field: "args.notes",
+      description: '"my analysis shows" \u2014 analysis is not container test evidence'
+    }
+  ],
+  correction: "Self-verification \u2260 mechanical proof. MECHANICAL PROOF REQUIRED: Container test evidence.",
+  enabled: true
+};
+
+// src/hooks/firewall/layers/index.ts
+var DEFAULT_LAYERS = [
+  L0_IDENTITY,
+  L1_THEATRICAL,
+  L2_TEST_BYPASS,
+  L3_INSPECTION,
+  L4_CONTAINER,
+  L5_1_HOST_FALLBACK,
+  L5_2_SUCCESS_CLAIM,
+  L5_3_MODEL_RESTRICTION,
+  L5_4_MOCK_STUB,
+  L5_5_SIMPLIFICATION,
+  L5_6_CONFUSION,
+  L5_7_SCOPE_CREEP,
+  L5_8_UNDERMINING,
+  L5_9_IMPATIENCE,
+  L5_10_SELF_REFERENCE
+];
+
+// src/hooks/v4.1/guardian-hook.ts
+var DANGEROUS_TOOLS2 = new Set([
+  "terminal",
+  "mcp_terminal",
+  "bash",
+  "mcp_bash",
+  "write_file",
+  "mcp_write_file",
+  "patch",
+  "mcp_patch",
+  "edit",
+  "mcp_edit",
+  "delete_file",
+  "mcp_delete_file"
+]);
+var FAKE_TEST_PATTERNS = [
+  /node\s+run-tests?\.js/i,
+  /node\s+verify.*\.mjs/i,
+  /npm\s+(run\s+)?test/i,
+  /yarn\s+(run\s+)?test/i,
+  /jest/i,
+  /vitest/i,
+  /mocha/i,
+  /jasmine/i,
+  /bun\s+test/i,
+  /pytest/i,
+  /python.*-m.*pytest/i,
+  /go\s+test/i,
+  /cargo\s+test/i,
+  /ruby\s+-Itest/i,
+  /rspec/i
+];
+var SOURCE_INSPECTION_PATTERNS = [
+  /test\s+-[fed]\s+/i,
+  /if\s+\[\s*-[fes]\s+.*\]\s*;/i,
+  /stat\s+/i,
+  /find\s+.*src/i,
+  /ls\s+-l.*(dist|src|build)\//i
+];
+var WRONG_CONTAINER_PATTERNS = [
+  /opencode\s+container\s+(run|start|exec)/i,
+  /opencode\s+run\s+/i
+];
+var _classifier = null;
+var _layerEngine = null;
+var _auditLogger = null;
+function getClassifier() {
+  if (!_classifier)
+    _classifier = new IntentClassifier;
+  return _classifier;
+}
+function getLayerEngine() {
+  if (!_layerEngine)
+    _layerEngine = new LayerEngine(new EvidenceGate(process.cwd()));
+  return _layerEngine;
+}
+function getAuditLogger() {
+  if (!_auditLogger)
+    _auditLogger = new FirewallAudit(process.cwd());
+  return _auditLogger;
+}
+function checkCrossAgentTools(tool) {
+  if (CROSS_AGENT_TOOLS.has(tool)) {
+    throw new Error(`[L5.7 BLOCKED] Tool ${tool} is restricted to administrative agents.`);
+  }
+}
+function checkSourceInspection(command) {
+  for (const pattern of SOURCE_INSPECTION_PATTERNS) {
+    if (pattern.test(command)) {
+      throw new Error(`[GUARDIAN] SOURCE_INSPECTION_BLOCKED: ${command}`);
+    }
+  }
+}
+function checkWrongContainer(command) {
+  for (const pattern of WRONG_CONTAINER_PATTERNS) {
+    if (pattern.test(command)) {
+      throw new Error(`[GUARDIAN] WRONG_CONTAINER_COMMAND_BLOCKED: ${command}`);
+    }
+  }
+}
+function evaluateContextualRule(command, currentGate) {
+  if (!command)
+    return;
+  for (const rule of CONTEXTUAL_FIREWALL_RULES) {
+    if (rule.pattern.test(command)) {
+      if (rule.forbiddenIn.includes(currentGate)) {
+        throw new Error(`[C-FIREWALL ${rule.label}] This action is forbidden during the ${currentGate} phase. ${rule.description}`);
+      }
+      if (rule.allowedIn.includes(currentGate))
+        continue;
+      const highStakesGates = ["verify", "audit", "delivery"];
+      if (highStakesGates.includes(currentGate)) {
+        throw new Error(`[C-FIREWALL ${rule.label}] Ambiguous action blocked during high-stakes phase: ${currentGate}. ${rule.description}`);
+      }
+    }
+  }
+}
+function createGuardianHook(guardian, gateManager) {
+  return async (input, output) => {
+    const { tool, sessionID } = input;
+    const args = output?.args ?? input?.args;
+    const command = extractCommandFromArgs(args);
+    const sessionAgent = getCurrentAgent(sessionID);
+    if (!sessionAgent)
+      return;
+    const isShark = sessionAgent === "shark" || sessionAgent?.startsWith("shark_");
+    const currentAgent = sessionAgent;
+    const currentGate = gateManager.getCurrentGate();
+    if (isShark) {
+      evaluateContextualRule(command, currentGate);
+    }
+    checkCrossAgentTools(tool);
+    if (isShark && DANGEROUS_TOOLS2.has(tool)) {
+      throw new Error(`[L0 BLOCKED] Dangerous tool denied for Shark agent: ${tool}`);
+    }
+    if (isShark && command) {
+      for (const pattern of FAKE_TEST_PATTERNS) {
+        if (pattern.test(command)) {
+          throw new Error(`[FIREWALL L2] npm test / run test / exec test bypass`);
+        }
+      }
+    }
+    if (isShark) {
+      if (command && guardian.isDangerousCommand(command)) {
+        throw new Error(`[GUARDIAN] DANGEROUS_COMMAND_BLOCKED: ${command}`);
+      }
+      if ((tool.includes("write_file") || tool.includes("patch")) && args) {
+        const a = args;
+        const writePath = a.path || null;
+        if (writePath && !guardian.canWrite(writePath, currentGate)) {
+          throw new Error(`[GUARDIAN] ZONE_VIOLATION: ${guardian.classifyZone(writePath)} zone \u2014 ${writePath} is forbidden during ${currentGate} phase.`);
+        }
+        if (writePath)
+          guardian.registerCreate(writePath);
+      }
+      if ((tool === "edit" || tool === "mcp_edit") && args) {
+        const ea = args;
+        if (ea?.filePath) {
+          if (!guardian.canEdit(ea.filePath, currentGate))
+            throw new Error(`[GUARDIAN] Edit blocked: ${ea.filePath} is forbidden during ${currentGate} phase.`);
+          guardian.registerEdit(ea.filePath);
+        }
+      }
+      if (command) {
+        const mc = guardian.canModifyFile(command);
+        if (!mc.allowed)
+          throw new Error(`[GUARDIAN] SOURCE_FILE_MODIFY_BLOCKED: ${mc.filePath}`);
+      }
+      checkSourceInspection(command);
+      checkWrongContainer(command);
+    }
+    if (isShark && (command || args && Object.keys(args).length > 0)) {
+      try {
+        const classifier = getClassifier();
+        const layerEngine = getLayerEngine();
+        const auditLogger = getAuditLogger();
+        const fwCtx = buildContext({ tool, args: args || {} }, { args: args || {} }, classifier, { brainInitialized: !!currentAgent, evidencePath: path4.join(process.cwd(), ".shark", "evidence"), currentGate: null }, sessionID || "", currentAgent || "shark");
+        const blockResult = layerEngine.evaluate(fwCtx, DEFAULT_LAYERS);
+        if (blockResult) {
+          auditLogger.log({
+            timestamp: new Date().toISOString(),
+            agent: currentAgent || "shark",
+            tool,
+            operationType: fwCtx.operationType,
+            layer: blockResult.layer,
+            reason: blockResult.reason,
+            command: command || null,
+            correction: blockResult.correction,
+            sessionId: sessionID || ""
+          });
+          throw createBlockResponse(blockResult);
+        }
+      } catch (err) {
+        if (err instanceof StructuredBlockError)
+          throw err;
+      }
+    }
+  };
+}
+
+// src/shared/agent-identity.ts
+var VANILLA_AGENTS = new Set(["plan", "build", "general", "explore"]);
+var SHARK_AGENTS = new Set(["shark"]);
+var SHARK_PREFIX = "shark_";
+function isSharkAgent(agentName) {
+  if (!agentName)
+    return false;
+  if (SHARK_AGENTS.has(agentName))
+    return true;
+  if (agentName.startsWith(SHARK_PREFIX))
+    return true;
+  return false;
+}
+
+// src/hooks/v4.1/gate-hook.ts
+import * as fs5 from "fs";
+import * as path5 from "path";
+var CONTAINER_TEST_RESULT_FILE2 = "ContainerTestResult.json";
+var lastDeliveryBlocked = false;
+function resetGateHookState() {
+  lastDeliveryBlocked = false;
+}
+function createGateHook(gateManager, evidenceCollector, peerDispatch) {
+  return async (input, output) => {
+    const { tool, sessionID } = input;
+    if (!isSharkAgent(getCurrentAgent(sessionID))) {
+      return;
+    }
+    const args = input.args;
+    const result = output.output;
+    const currentGate = gateManager.getCurrentGate();
+    if (tool === "shark-test-runner") {
+      const testResult = parseTestRunnerResult(result);
+      if (testResult) {
+        const evidencePath = path5.join(process.cwd(), ".shark", "evidence", currentGate, CONTAINER_TEST_RESULT_FILE2);
+        try {
+          fs5.mkdirSync(path5.dirname(evidencePath), { recursive: true });
+          fs5.writeFileSync(evidencePath, JSON.stringify(testResult));
+        } catch {}
+        const gateEvidence = {
+          gate: currentGate,
+          timestamp: Date.now(),
+          passed: testResult.overallPassed,
+          files: [evidencePath],
+          metadata: {
+            tool: "shark-test-runner",
+            sessionID,
+            testSuite: testResult.suite,
+            passedTests: testResult.passedTests,
+            totalTests: testResult.totalTests,
+            overallPassed: testResult.overallPassed
+          }
+        };
+        evidenceCollector.collectEvidence(gateEvidence);
+      }
+    }
+    const evidence = buildEvidenceRecord(tool, args, result);
+    if (evidence) {
+      const gateEvidence = {
+        gate: currentGate,
+        timestamp: Date.now(),
+        passed: true,
+        files: evidence.files || [],
+        metadata: { tool, sessionID, workEvidence: evidence.workEvidence }
+      };
+      evidenceCollector.collectEvidence(gateEvidence);
+    }
+    if (currentGate === "delivery" && !lastDeliveryBlocked) {
+      const deliveryBlocked = checkDeliveryGateBlocked();
+      lastDeliveryBlocked = deliveryBlocked;
+      if (deliveryBlocked) {
+        if (tool === "terminal" || tool === "bash") {
+          const cmd = extractCommandFromArgs(args) || "";
+          if (/git.*commit|ship|release|deploy|deliver/i.test(cmd)) {
+            throw new Error(`[SHARK DELIVERY BLOCKED] You MUST run 'shark-test-runner' with action='run' before delivery.`);
+          }
+        }
+      }
+    }
+    const shouldAdvance = checkGateAdvance(tool, args, result, currentGate);
+    if (shouldAdvance && gateManager.canTransition(shouldAdvance)) {
+      gateManager.passCurrentGate();
+      gateManager.transitionTo(shouldAdvance);
+      if (shouldAdvance === "test" && currentGate === "build" && peerDispatch) {
+        peerDispatch.onBuildComplete();
+      }
+    }
+    if (currentGate === "verify") {
+      const verifyResultStr = String(result || "");
+      const verifyHasFailure = verifyResultStr.includes('"error"') || verifyResultStr.includes('"status":"error"') || verifyResultStr.includes("fail") || verifyResultStr.includes("FAIL");
+      if (verifyHasFailure) {
+        const verifyLoopResult = gateManager.handleVerifyFailure();
+        const state = gateManager.getState();
+        if (peerDispatch && state.verifyAttempts >= 3) {
+          peerDispatch.onGateFailed("verify", state.verifyAttempts);
+        }
+        if (verifyLoopResult.action === "escalate") {}
+      }
+    }
+  };
+}
+function parseTestRunnerResult(result) {
+  if (!result)
+    return null;
+  try {
+    const parsed = typeof result === "string" ? JSON.parse(result) : result;
+    if (parsed && typeof parsed === "object") {
+      return {
+        suite: parsed.suite || "shark-e2e",
+        overallPassed: parsed.overallPassed === true,
+        passedTests: parsed.passedTests || 0,
+        totalTests: parsed.totalTests || 0
+      };
+    }
+  } catch {}
+  return null;
+}
+function checkDeliveryGateBlocked() {
+  const evidencePath = path5.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE2);
+  try {
+    const content = fs5.readFileSync(evidencePath, "utf-8");
+    const testResult = JSON.parse(content);
+    return !testResult.overallPassed;
+  } catch {
+    return true;
+  }
+}
+function buildEvidenceRecord(tool, args, result) {
+  if (!args)
+    return null;
+  const a = args;
+  switch (tool) {
+    case "write_file":
+    case "mcp_write_file": {
+      const filePath = a.path;
+      return { files: filePath ? [filePath] : [], workEvidence: `wrote:${filePath}` };
+    }
+    case "patch":
+    case "mcp_patch": {
+      const filePath = a.path;
+      return { files: filePath ? [filePath] : [], workEvidence: `patched:${filePath}` };
+    }
+    case "terminal":
+    case "mcp_terminal": {
+      const cmd = extractCommandFromArgs(args) || "";
+      return { files: [], workEvidence: `ran:${cmd.slice(0, 100)}` };
+    }
+    default:
+      return null;
+  }
+}
+function checkGateAdvance(tool, args, result, currentGate) {
+  const resultStr = String(result || "");
+  const cmd = extractCommandFromArgs(args) || "";
+  if (currentGate === "build") {
+    if (["write_file", "mcp_write_file", "patch", "mcp_patch"].includes(tool)) {
+      return "test";
+    }
+  }
+  if (currentGate === "test") {
+    if (/test.*(pass|success|ok)/i.test(resultStr) || /passed.*tests?/i.test(cmd)) {
+      return "verify";
+    }
+  }
+  if (currentGate === "audit") {
+    if (/npm.*audit|yarn.*audit.*0.*vulnerab/i.test(resultStr) || /sast|SAST.*clean|no.*issues/i.test(resultStr) || /0.*critical|0.*high.*vulnerab/i.test(resultStr)) {
+      return "delivery";
+    }
+  }
+  return null;
+}
+
+// src/hooks/v4.1/chat-message-hook.ts
+function createChatMessageHook() {
+  return async (input, output) => {
+    const { agent, sessionID } = input;
+    if (agent && isSharkAgent(agent)) {
+      setCurrentAgent(agent, sessionID);
+    }
+  };
+}
+
+// src/hooks/v4.1/messages-transform-hook.ts
+import * as path6 from "path";
+import * as fs6 from "fs";
+function hasContainerTestEvidence() {
+  const evidencePath = path6.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE);
+  if (!fs6.existsSync(evidencePath))
+    return false;
+  try {
+    const result = JSON.parse(fs6.readFileSync(evidencePath, "utf-8"));
+    return result.overallPassed === true && result.passRate >= 0.96;
+  } catch {
+    return false;
+  }
+}
+function extractTextFromParts(parts) {
+  if (!Array.isArray(parts))
+    return "";
+  let text = "";
+  for (const part of parts) {
+    if (part && part.type === "text" && part.text) {
+      text += (text ? " " : "") + part.text;
+    }
+  }
+  return text;
+}
+var BLOCK_MESSAGES = {
+  "L5.1 Host fallback": "Your response was BLOCKED by the mechanical firewall. You attempted to suggest host-based testing instead of container testing. Host testing DOES NOT EQUAL container testing. Container isolation is REQUIRED for ship gate. Use the proper container testing workflow. Do NOT advance gates with host-based params.",
+  "L5.2 Success claim without proof": "Your response was BLOCKED by the mechanical firewall. You claimed success without mechanical proof. MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). Self-verification is NOT proof.",
+  "L5.3 Model restriction": "Your response was BLOCKED by the mechanical firewall. You referenced model restrictions or limitations. Quality gates apply regardless of model choice.",
+  "L5.4 Mock/stub data": "Your response was BLOCKED by the mechanical firewall. You proposed mock, stub, or fake data. MECHANICAL PROOF REQUIRED: Container test evidence. Real data + real execution required.",
+  "L5.5 Oversimplification": "Your response was BLOCKED by the mechanical firewall. You oversimplified or hand-waved complex aspects. Nuance matters. Address the full complexity.",
+  "L5.6 Confusion pretense": 'Your response was BLOCKED by the mechanical firewall. You used hedging language ("somewhat works", "kinda", "mostly"). If uncertain, admit it clearly. "Somewhat works" is not acceptable.',
+  "L5.7 Scope creep": "Your response was BLOCKED by the mechanical firewall. You expanded scope beyond the current task. Stay on task. Use a separate task for new items.",
+  "L5.7 Cross-agent tool": "Your response was BLOCKED by the mechanical firewall. You referenced cross-agent tools (hermes, hive, kraken). These are NOT available to shark agents. Use only shark tools.",
+  "L5.8 Undermining": 'Your response was BLOCKED by the mechanical firewall. You undermined quality gates with "not worth it" or "diminishing returns" excuses. Quality gates exist for reason.',
+  "L5.9 Impatience": 'Your response was BLOCKED by the mechanical firewall. You showed impatience ("ship it", "good enough", "just deploy"). Proper verification takes time. Do not skip steps.',
+  "L5.10 Self-reference": 'Your response was BLOCKED by the mechanical firewall. You claimed self-verification ("I have verified", "my assessment is"). Self-verification IS NOT mechanical proof. MECHANICAL PROOF REQUIRED.',
+  "L5.11 Progress Laundering": "Your response was BLOCKED by the mechanical firewall. You attempted to launder results via a summary or pass-rate claim without providing raw evidence. RAW LOGS ARE THE ONLY EVIDENCE. Summarization is a bypass attempt."
+};
+function blockMessage(label) {
+  return `[ANTI-DERAILMENT BLOCKED: ${label}]
+
+${BLOCK_MESSAGES[label] || `Your response was blocked by mechanical firewall rule ${label}.`}`;
+}
+function blockLabel(text, patterns, label, requireEvidence) {
+  for (const pattern of patterns) {
+    if (pattern.test(text)) {
+      if (requireEvidence && hasContainerTestEvidence())
+        return null;
+      return label;
+    }
+  }
+  return null;
+}
+function blockLabelL8(text) {
+  for (const sig of BEHAVIORAL_PATTERNS) {
+    if (sig.pattern.test(text)) {
+      if (sig.requireEvidence && hasContainerTestEvidence())
+        return null;
+      return `L8 ${sig.label}`;
+    }
+  }
+  return null;
+}
+function blockLabelScopeCreep(text) {
+  for (const pattern of SCOPE_CREEP_PATTERNS) {
+    if (pattern.test(text)) {
+      for (const cap of CROSS_AGENT_PATTERNS) {
+        if (cap.test(text))
+          return "L5.7 Cross-agent tool";
+      }
+      return "L5.7 Scope creep";
+    }
+  }
+  return null;
+}
+function detectDerailment(text, sessionID) {
+  const slopScore = getSlopScore(sessionID);
+  const isUltraStrict = slopScore >= 5;
+  const block = blockLabel(text, HOST_FALLBACK_PATTERNS, "L5.1 Host fallback") || blockLabel(text, SUCCESS_CLAIM_PATTERNS, "L5.2 Success claim without proof", true) || blockLabel(text, MODEL_RESTRICTION_PATTERNS, "L5.3 Model restriction") || blockLabel(text, MOCK_STUB_PATTERNS, "L5.4 Mock/stub data", true) || blockLabel(text, SIMPLIFICATION_PATTERNS, "L5.5 Oversimplification") || blockLabel(text, CONFUSION_PRETENSE_PATTERNS, "L5.6 Confusion pretense") || blockLabelScopeCreep(text) || blockLabel(text, UNDERMINING_PATTERNS, "L5.8 Undermining") || blockLabel(text, IMPATIENCE_PATTERNS, "L5.9 Impatience") || blockLabel(text, SELF_REFERENCE_PATTERNS, "L5.10 Self-reference", true) || blockLabel(text, LAUNDERING_PATTERNS, "L5.11 Progress Laundering") || blockLabelL8(text);
+  if (block) {
+    incrementSlopScore(sessionID, 1);
+  }
+  if (isUltraStrict && !block) {
+    if (text.length < 50) {
+      return "L8 ULTRA-STRICT: Response too vague. High slop score detected. Please provide detailed mechanical evidence.";
+    }
+  }
+  return block;
+}
+function replaceTextParts(parts, label) {
+  if (!Array.isArray(parts))
+    return;
+  let replaced = false;
+  const msg = blockMessage(label);
+  for (const part of parts) {
+    if (part && part.type === "text") {
+      part.text = replaced ? "" : msg;
+      replaced = true;
+    }
+  }
+}
+function createMessagesTransformHook() {
+  return async (input, output) => {
+    const { sessionID } = input;
+    const messages = output?.messages;
+    if (!messages || messages.length === 0)
+      return;
+    for (const msg of messages) {
+      if (msg?.info?.role === "assistant" && msg?.info?.agent) {
+        if (isSharkAgent(msg.info.agent)) {
+          setCurrentAgent(msg.info.agent, sessionID);
+          break;
+        }
+      }
+    }
+    for (const msg of messages) {
+      if (msg?.info?.role !== "assistant")
+        continue;
+      if (!msg?.info?.agent || !isSharkAgent(msg.info.agent))
+        continue;
+      const text = extractTextFromParts(msg.parts);
+      if (!text.trim())
+        continue;
+      const block = detectDerailment(text, sessionID || "");
+      if (block) {
+        replaceTextParts(msg.parts, block);
+      }
+    }
+  };
+}
+
+// src/hooks/v4.1/command-execute-hook.ts
+import * as path7 from "path";
+import * as fs7 from "fs";
+var CONTAINER_TEST_RESULT_FILE3 = "ContainerTestResult.json";
+function hasContainerTestEvidence2() {
+  const evidencePath = path7.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE3);
+  if (!fs7.existsSync(evidencePath)) {
+    return false;
+  }
+  try {
+    const result = JSON.parse(fs7.readFileSync(evidencePath, "utf-8"));
+    return result.overallPassed === true && result.passRate >= 0.96;
+  } catch {
+    return false;
+  }
+}
+var THEATRICAL_PATTERNS = [
+  /\|.*wc\s+-l/i,
+  /wc\s+-l.*\|/i,
+  /cat\s+.*\|.*wc/i,
+  /grep\s+.*\|.*wc/i,
+  /echo\s+.*\|.*wc/i,
+  /ls\s+.*\|.*wc/i,
+  /wc\s+-l.*dist\//i,
+  /wc\s+-l.*src\//i,
+  /wc\s+-l.*build\//i,
+  /\|.*tee/i,
+  /\|.*>.*\./i,
+  /grep.*setCurrentAgent.*src/i,
+  /grep.*isSharkAgent.*src/i,
+  /grep.*guardian.*src/i
+];
+var FAKE_TEST_PATTERNS2 = [
+  /node\s+run-tests?\.js/i,
+  /node\s+verify.*\.mjs/i,
+  /npm\s+(run\s+)?test/i,
+  /yarn\s+(run\s+)?test/i,
+  /jest/i,
+  /vitest/i,
+  /mocha/i,
+  /jasmine/i,
+  /bun\s+test/i,
+  /pytest/i,
+  /python.*-m.*pytest/i,
+  /go\s+test/i,
+  /cargo\s+test/i,
+  /ruby\s+-Itest/i,
+  /rspec/i
+];
+var LEGITIMATE_PATTERNS = [
+  /mkdir\s+-p/i,
+  /cp\s+-r/i,
+  /mv\s+/i,
+  /cat\s+[^\|]+$/i,
+  /cat\s+[^\|]+\s*\|?\s*grep/i,
+  /head\s+-[0-9]+\s+/i,
+  /tail\s+-[0-9]+\s+/i,
+  /grep\s+-[rEn]+.*[^\|]$/i,
+  /grep\s+[^\|]+$/i,
+  /find\s+.*-name/i,
+  /test\s+-d/i,
+  /test\s+-x/i,
+  /ls\s+-[la]/i
+];
+var WRONG_CONTAINER_PATTERNS2 = [
+  /opencode\s+container\s+run/i,
+  /opencode\s+container\s+start/i,
+  /opencode\s+container\s+exec/i,
+  /opencode\s+run\s+/i
+];
+var SOURCE_INSPECTION_PATTERNS2 = [
+  /test\s+-f\s+\$\{?.*\}/i,
+  /test\s+-e\s+\$\{?.*\}/i,
+  /if\s+\[\s*-[fes]\s+.*\]\s*;/i,
+  /grep\s+-r\s+.*src\//i,
+  /ls\s+-l.*dist\//i
+];
+var HOST_FALLBACK_PATTERNS2 = [
+  /host.*testing.*already.*works/i,
+  /fall.*back.*to.*host/i,
+  /host.*already.*proves/i,
+  /local.*works.*container.*not.*needed/i,
+  /since.*host.*works/i,
+  /skip.*container.*test/i,
+  /container.*not.*necessary/i,
+  /container.*not.*needed/i,
+  /not.*need.*container/i,
+  /skip.*container/i,
+  /use.*host.*instead/i,
+  /host.*prove.*it.*works/i,
+  /already.*proven.*to.*work/i,
+  /already.*verified.*on.*host/i,
+  /already.*tested.*on.*local/i
+];
+var SUCCESS_CLAIM_PATTERNS2 = [
+  /it.*works.*trust.*me/i,
+  /trust.*me.*it.*works/i,
+  /believe.*me.*it.*works/i,
+  /already.*verified.*by.*myself/i,
+  /already.*tested.*and.*works/i,
+  /already.*proven.*to.*work/i,
+  /obviously.*correct/i,
+  /clearly.*works/i,
+  /self.*evidently.*correct/i,
+  /in.*my.*assessment.*it.*works/i,
+  /in.*my.*experience.*it.*works/i,
+  /based.*on.*my.*analysis.*works/i,
+  /no.*need.*for.*test/i,
+  /no.*need.*for.*verification/i,
+  /no.*further.*test.*needed/i
+];
+var MODEL_RESTRICTION_PATTERNS2 = [
+  /only.*gpt/i,
+  /only.*claude/i,
+  /only.*gemini/i,
+  /only.*llama/i,
+  /must.*use.*gpt/i,
+  /must.*use.*claude/i,
+  /restricted.*to.*model/i,
+  /model.*quota/i,
+  /model.*limit/i,
+  /rate.*limit.*excuse/i,
+  /api.*key.*issue/i,
+  /can't.*afford.*model/i,
+  /too.*expensive.*model/i,
+  /model.*cost.*too.*high/i,
+  /switch.*model.*\u7406\u7531/i
+];
+var MOCK_STUB_PATTERNS2 = [
+  /mock.*data/i,
+  /stub.*data/i,
+  /fake.*data/i,
+  /dummy.*data/i,
+  /sample.*data/i,
+  /test.*data.*only/i,
+  /mocked.*response/i,
+  /stubbed.*response/i,
+  /fake.*api/i,
+  /hardcoded.*response/i,
+  /static.*json.*instead/i,
+  /no.*real.*api/i
+];
+var SIMPLIFICATION_PATTERNS2 = [
+  /over.*simplif/i,
+  /overly.*simplif/i,
+  /too.*simpl/i,
+  /oversimplif/i,
+  /hand.*wave/i,
+  /handwave/i,
+  / gloss.*over /i,
+  /glossed.*over/i,
+  /skip.*detail/i,
+  /skip.*nuance/i,
+  /oversimplif/i
+];
+var CONFUSION_PRETENSE_PATTERNS2 = [
+  /it.*somewhat.*works/i,
+  /sorta.*works/i,
+  /kinda.*works/i,
+  /more.*or.*less/i,
+  / mostly .*works/i,
+  /approximately.*correct/i,
+  / basically .*correct/i,
+  / essentially .*works/i,
+  / nominally .*functional/i,
+  / partially .*implemented/i,
+  / partially .*working/i,
+  /somewhat.*correct/i
+];
+var SCOPE_CREEP_PATTERNS2 = [
+  /while.*at.*it/i,
+  /while.*we.*re.*at.*it/i,
+  /at.*the.*same.*time/i,
+  /also.*need.*to/i,
+  /might.*as.*well/i,
+  /\u987A\u4FBF/i,
+  /\u987A\u4FBF\u8BF4\u4E00\u4E0B/i,
+  /just.*to.*be.*thorough/i,
+  /for.*completeness/i,
+  /one.*more.*thing/i,
+  /oh.*and.*also/i,
+  /on.*the.*side/i
+];
+var UNDERMINING_PATTERNS2 = [
+  /not.*worth.*the.*effort/i,
+  /too.*much.*work/i,
+  /not.*worth.*it/i,
+  /diminishing.*returns/i,
+  / marginal .*benefit/i,
+  / minimal .*gain/i,
+  /savvy.*engineer.*would/i,
+  /experienced.*developer.*would/i,
+  /realistic.*timeline/i,
+  /realistically/i,
+  / practically .*impossible/i,
+  / realistically .*impractical/i
+];
+var IMPATIENCE_PATTERNS2 = [
+  /let's.*just.*move.*on/i,
+  /let's.*skip.*to.*the.*end/i,
+  /just.*ship.*it/i,
+  /good.*enough/i,
+  /close.*enough/i,
+  /ship.*it/i,
+  /just.*deploy/i,
+  /fuck.*it/i,
+  / ship .*now/i,
+  / deploy .*now/i,
+  /let's.*hurry/i
+];
+var SELF_REFERENCE_PATTERNS2 = [
+  /i.*have.*verified.*that/i,
+  /i.*verified.*it.*works/i,
+  /my.*verification.*shows/i,
+  /i.*tested.*it.*works/i,
+  /i.*ran.*it.*and.*works/i,
+  /my.*testing.*confirms/i,
+  /i.*know.*it.*works/i,
+  /i.*am.*certain.*it.*works/i,
+  /my.*assessment.*is/i,
+  /in.*my.*assessment/i,
+  /my.*analysis.*shows/i
+];
+function checkHostFallback(text) {
+  for (const pattern of HOST_FALLBACK_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.1] Host fallback detected. ` + `Host testing \u2260 container testing. Container isolation is REQUIRED for ship gate.`);
+    }
+  }
+}
+function checkSuccessClaim(text) {
+  for (const pattern of SUCCESS_CLAIM_PATTERNS2) {
+    if (pattern.test(text)) {
+      if (!hasContainerTestEvidence2()) {
+        throw new Error(`[ANTI-DERAILMENT L5.2] Success claim without proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). ` + `Run: opencode run "shark-test-runner" --agent shark`);
+      }
+    }
+  }
+}
+function checkImpatience(text) {
+  for (const pattern of IMPATIENCE_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.9] Impatience detected. ` + `Proper verification takes time. Do not skip required steps.`);
+    }
+  }
+}
+function checkFakeTestRunner(text) {
+  for (const pattern of FAKE_TEST_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-SLOP L2] Fake test runner detected: "${text}". ` + `Tests must run via OpenCode hooks. Use: opencode run "shark-test-runner"`);
+    }
+  }
+}
+function checkSourceInspection2(text) {
+  for (const pattern of SOURCE_INSPECTION_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-SLOP L3] Source inspection detected: "${text}". ` + `File existence \u2260 runtime verification. Use actual execution.`);
+    }
+  }
+}
+function checkWrongContainer2(text) {
+  for (const pattern of WRONG_CONTAINER_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-SLOP L4] Wrong container command detected: "${text}". ` + `Use: opencode run "command" (not opencode container run)`);
+    }
+  }
+}
+function checkSelfReference(text) {
+  for (const pattern of SELF_REFERENCE_PATTERNS2) {
+    if (pattern.test(text)) {
+      if (!hasContainerTestEvidence2()) {
+        throw new Error(`[ANTI-DERAILMENT L5.10] Self-reference claim without proof. ` + `Self-verification \u2260 mechanical proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence.`);
+      }
+    }
+  }
+}
+function checkModelRestriction(text) {
+  for (const pattern of MODEL_RESTRICTION_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.3] Model restriction excuse detected. ` + `Quality gates apply regardless of model choice.`);
+    }
+  }
+}
+function checkMockStub(text) {
+  for (const pattern of MOCK_STUB_PATTERNS2) {
+    if (pattern.test(text)) {
+      if (!hasContainerTestEvidence2()) {
+        throw new Error(`[ANTI-DERAILMENT L5.4] Mock/stub data detected. ` + `MECHANICAL PROOF REQUIRED: Container test evidence. ` + `Real data + real execution required for ship gate.`);
+      }
+    }
+  }
+}
+function checkSimplification(text) {
+  for (const pattern of SIMPLIFICATION_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.5] Oversimplification detected. ` + `Nuance matters. Do not hand-wave complex aspects.`);
+    }
+  }
+}
+function checkConfusionPretense(text) {
+  for (const pattern of CONFUSION_PRETENSE_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.6] Confusion pretense detected. ` + `If uncertain, admit it. "Somewhat works" is not an acceptable status.`);
+    }
+  }
+}
+function checkTheatricalVerificationCmd(text) {
+  for (const pattern of LEGITIMATE_PATTERNS) {
+    if (pattern.test(text)) {
+      return;
+    }
+  }
+  for (const pattern of THEATRICAL_PATTERNS) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-SLOP L1] Counting theater detected: "${text}". ` + `Verification requires running, not counting.`);
+    }
+  }
+}
+function checkScopeCreep(text) {
+  for (const pattern of SCOPE_CREEP_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.7] Scope creep detected. ` + `Stay on task. Use separate task for new items.`);
+    }
+  }
+}
+function checkUndermining(text) {
+  for (const pattern of UNDERMINING_PATTERNS2) {
+    if (pattern.test(text)) {
+      throw new Error(`[ANTI-DERAILMENT L5.8] Undermining detected. ` + `Quality gates exist for reason. Do not use "not worth it" excuses.`);
+    }
+  }
+}
+function checkMessageEnforcement(text) {
+  checkTheatricalVerificationCmd(text);
+  checkFakeTestRunner(text);
+  checkSourceInspection2(text);
+  checkWrongContainer2(text);
+  checkHostFallback(text);
+  checkSuccessClaim(text);
+  checkModelRestriction(text);
+  checkMockStub(text);
+  checkSimplification(text);
+  checkConfusionPretense(text);
+  checkScopeCreep(text);
+  checkUndermining(text);
+  checkImpatience(text);
+  checkSelfReference(text);
+}
+function createCommandExecuteHook() {
+  return async (input, output) => {
+    const { command, arguments: args } = input;
+    if (!command) {
+      return;
+    }
+    if (command === "run" && args) {
+      const agentMatch = args.match(/--agent\s+(\S+)/);
+      const agentName = agentMatch ? agentMatch[1] : null;
+      if (!agentName || !isSharkAgent(agentName)) {
+        return;
+      }
+      setCurrentAgent(agentName);
+      const agentIndex = args.indexOf("--agent");
+      const message = agentIndex > 0 ? args.substring(0, agentIndex).trim() : args;
+      if (message && message.length > 0) {
+        checkMessageEnforcement(message);
+      }
+    }
+  };
+}
+
+// src/hooks/v4.1/tool-summarizer-hook.ts
+var MAX_OUTPUT_LINES = 100;
+var MAX_LS_ENTRIES = 20;
+function createToolSummarizerHook() {
+  return async (input, output) => {
+    if (!isSharkAgent(getCurrentAgent()))
+      return;
+    const tool = input.tool;
+    let outputStr = output.output || "";
+    if (tool === "Bash" || tool === "bash") {
+      if (outputStr.includes("grep") || outputStr.includes("rg ")) {
+        output.output = summarizeGrep(outputStr);
+      } else if (outputStr.includes("ls ") || outputStr.includes(`ls
+`)) {
+        output.output = summarizeLs(outputStr);
+      }
+    }
+    if (tool === "Read" || tool === "read") {
+      output.output = summarizeRead(outputStr);
+    }
+  };
+}
+function summarizeGrep(output) {
+  const lines = output.split(`
+`).filter((l) => l.trim());
+  const matchCount = lines.length;
+  const fileSet = new Set;
+  for (const line of lines) {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx > 0) {
+      fileSet.add(line.substring(0, colonIdx));
+    }
+  }
+  return `grep found ${matchCount} matches across ${fileSet.size} files. Showing first 20:
+${lines.slice(0, 20).join(`
+`)}`;
+}
+function summarizeLs(output) {
+  const lines = output.split(`
+`).filter((l) => l.trim());
+  const total = lines.length;
+  if (total <= MAX_LS_ENTRIES) {
+    return output;
+  }
+  return `ls: ${total} entries. Showing first ${MAX_LS_ENTRIES}:
+${lines.slice(0, MAX_LS_ENTRIES).join(`
+`)}`;
+}
+function summarizeRead(output) {
+  const lines = output.split(`
+`);
+  if (lines.length <= MAX_OUTPUT_LINES) {
+    return output;
+  }
+  return `${lines.slice(0, MAX_OUTPUT_LINES).join(`
+`)}
+[... ${lines.length - MAX_OUTPUT_LINES} more lines truncated ...]`;
+}
+
+// src/hooks/v4.1/system-transform-hook.ts
+import * as fs8 from "fs";
+import * as path8 from "path";
+var CONTAINER_TEST_RESULT_FILE4 = "ContainerTestResult.json";
+var BUILD_CONTEXT_FILE = "build-context.md";
+var lastInjectedGate = null;
+var buildContextInjected = false;
+var identityInjected = false;
+var _cachedIdentity = null;
+function resetSystemTransformState() {
+  lastInjectedGate = null;
+  buildContextInjected = false;
+  identityInjected = false;
+  _cachedIdentity = null;
+}
+var IDENTITY_FILES = ["SHARK.md", "IDENTITY.md", "EXECUTION.md", "ARCHITECTURE.md", "CAPABILITIES.md"];
+function loadIdentity() {
+  if (_cachedIdentity !== null)
+    return _cachedIdentity;
+  const identityDir = findIdentityDir();
+  if (!identityDir)
+    return null;
+  const parts = [];
+  for (const file of IDENTITY_FILES) {
+    try {
+      const content = fs8.readFileSync(path8.join(identityDir, file), "utf-8");
+      parts.push(content.trim());
+    } catch {}
+  }
+  if (parts.length === 0)
+    return null;
+  _cachedIdentity = parts.join(`
+
+---
+
+`);
+  return _cachedIdentity;
+}
+function findIdentityDir() {
+  const cwd = process.cwd();
+  const home = process.env.HOME || "/root";
+  const candidates = [
+    path8.join(home, ".config", "opencode", "plugins", "shark-agent-v4.8.4", "identity"),
+    path8.join(home, ".config", "opencode", "plugins", "shark-agent-v4.8.3", "identity"),
+    path8.join(home, ".config", "opencode", "plugins", "shark-agent-v4", "identity"),
+    path8.join(cwd, "identity"),
+    path8.join(cwd, "src", "identity")
+  ];
+  for (const candidate of candidates) {
+    try {
+      if (fs8.existsSync(candidate) && fs8.statSync(candidate).isDirectory()) {
+        return candidate;
+      }
+    } catch {}
+  }
+  return null;
+}
+function createSystemTransformHook(gateManager, peerDispatch) {
+  return async (input, output) => {
+    const agentName = input.agent ?? output.agent;
+    if (!isSharkAgent(agentName)) {
+      return;
+    }
+    const state = gateManager.getState();
+    const systemOutput = output;
+    if (!Array.isArray(systemOutput.system))
+      return;
+    if (!identityInjected) {
+      identityInjected = true;
+      const identity = loadIdentity();
+      if (identity) {
+        systemOutput.system.unshift(identity);
+      }
+    }
+    if (!buildContextInjected) {
+      buildContextInjected = true;
+      const buildContext2 = loadBuildContext();
+      if (buildContext2) {
+        systemOutput.system.unshift(buildContext2);
+      }
+    }
+    if (state.currentGate !== lastInjectedGate) {
+      lastInjectedGate = state.currentGate;
+      const criteria = gateManager.getCriteria(state.currentGate);
+      const enforcementContext = `
+[SHARK ENFORCEMENT CONTEXT]
+Gate: ${state.currentGate.toUpperCase()}
+Iteration: ${state.currentIteration}
+Blocking Criteria:
+${criteria.blockingCriteria.map((c) => `  - ${c}`).join(`
+`)}
+Evidence Required:
+${criteria.evidenceRequired.map((e) => `  - ${e}`).join(`
+`)}
+IRONCLAD RULE: Source file edits require DUPLICATE workflow:
+1. cp {file} {file}.v1.0.0
+2. edit {file}.v1.0.0
+3. Verify changes
+4. Optional: Replace original
+CRITICAL: Before editing MAJOR CODEBASE files (agent harnesses, OS, core infrastructure), you MUST:
+1. Use the question tool to ask user for explicit confirmation
+2. Explain what changes you intend to make
+3. Wait for user approval before proceeding
+`.trim();
+      systemOutput.system.push(enforcementContext);
+      if (state.currentGate === "delivery") {
+        const testEvidencePath = path8.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE4);
+        let testStatus = "NOT_RUN";
+        let testPassed = false;
+        if (fs8.existsSync(testEvidencePath)) {
+          try {
+            const testResult = JSON.parse(fs8.readFileSync(testEvidencePath, "utf-8"));
+            testStatus = testResult.overallPassed ? "PASSED" : "FAILED";
+            testPassed = testResult.overallPassed;
+          } catch {
+            testStatus = "ERROR_READING";
+          }
+        }
+        const deliveryWarning = `
+[SHARK DELIVERY GATE WARNING]
+Container tests are MANDATORY for delivery. You CANNOT ship, commit, release, or deploy without passing container tests.
+Current Container Test Status: ${testStatus}
+REQUIRED ACTION:
+  1. Run: shark-test-runner action=run
+  2. Wait for all tests to pass
+  3. DO NOT attempt any delivery actions until tests pass
+`.trim();
+        systemOutput.system.push(deliveryWarning);
+        if (!testPassed && testStatus !== "NOT_RUN") {
+          systemOutput.system.push(`[SHARK HARD BLOCK] Tests FAILED. You MUST fix the failing tests before delivery.`);
+        } else if (testStatus === "NOT_RUN") {
+          systemOutput.system.push(`[SHARK HARD BLOCK] No container test evidence found. You MUST run: shark-test-runner action=run`);
+        }
+      }
+    }
+    if (peerDispatch && state.currentGate === "plan" && state.currentIteration === "V1.0") {
+      const pState = peerDispatch.getState();
+      const brainContext = `
+[SHARK BRAIN CONTEXT]
+Active Brains: ${pState.activeBrains.join(", ")}
+Primary Brain: ${pState.primaryBrain}
+Brain coordination is MECHANICAL.
+`.trim();
+      systemOutput.system.push(brainContext);
+    }
+  };
+}
+function loadBuildContext() {
+  try {
+    const primaryPath = path8.join(process.cwd(), ".shark", "auto-inject", "BUILD_CONTEXT.md");
+    if (fs8.existsSync(primaryPath)) {
+      return fs8.readFileSync(primaryPath, "utf-8");
+    }
+    const legacyPath = path8.join(process.cwd(), ".shark", BUILD_CONTEXT_FILE);
+    if (fs8.existsSync(legacyPath)) {
+      return fs8.readFileSync(legacyPath, "utf-8");
+    }
+  } catch (err) {}
+  return null;
+}
+
+// src/hooks/v4.1/session-hook.ts
+import * as path9 from "path";
+import * as fs9 from "fs";
+var dirCreationAttempted = false;
+function createSessionHook(gateManager, _evidenceCollector, peerDispatch, stateStore, messenger) {
+  return async (input) => {
+    const event = input.event;
+    if (!event?.type)
+      return;
+    if (!isSharkAgent(event.agent)) {
+      setCurrentAgent(undefined, event.sessionId);
+      return;
+    }
+    setCurrentAgent(event.agent, event.sessionId);
+    if (event.type === "session.created") {
+      handleSessionCreated(gateManager, peerDispatch);
+      try {
+        const sopPath = path9.join(process.cwd(), ".shark", "resumption-sop.md");
+        if (fs9.existsSync(sopPath)) {
+          const sop = fs9.readFileSync(sopPath, "utf-8");
+          messenger.send({
+            from: "system",
+            to: "execution-brain",
+            type: "directive",
+            priority: "critical",
+            payload: { content: sop, label: "RESUMPTION_SOP" },
+            requiresAck: true
+          });
+        }
+      } catch (err) {}
+    } else if (event.type === "session.ended") {
+      handleSessionEnded(stateStore, messenger);
+    }
+  };
+}
+function handleSessionCreated(gateManager, peerDispatch) {
+  gateManager.restore({
+    currentGate: "plan",
+    gateStatus: {
+      plan: "pending",
+      build: "pending",
+      test: "pending",
+      verify: "pending",
+      audit: "pending",
+      delivery: "pending"
+    },
+    verifyAttempts: 0,
+    currentIteration: "V1.0",
+    iterationAttempts: {}
+  });
+  if (peerDispatch) {
+    peerDispatch.initialize();
+  }
+  if (!dirCreationAttempted) {
+    dirCreationAttempted = true;
+    const sharkDir = path9.join(process.cwd(), ".shark");
+    fs9.mkdirSync(sharkDir, { recursive: true });
+    fs9.mkdirSync(path9.join(sharkDir, "evidence"), { recursive: true });
+    fs9.mkdirSync(path9.join(sharkDir, "checkpoints"), { recursive: true });
+  }
+}
+function handleSessionEnded(stateStore, messenger) {
+  stateStore.cleanup();
+  messenger.cleanup();
+  dirCreationAttempted = false;
+  resetSystemTransformState();
+  resetGateHookState();
+  setCurrentAgent(undefined);
+  clearCurrentAgent();
+}
+
+// src/hooks/v4.1/compacting-hook.ts
+import * as fs10 from "fs";
+import * as path10 from "path";
+var BUILD_CONTEXT_FILE2 = "build-context.md";
+function generateBuildContext(gateManager) {
+  const currentGate = gateManager.getCurrentGate();
+  const iteration = gateManager.getCurrentIteration();
+  const gateState = gateManager.getState();
+  return `# SHARK AGENT v4.8.3 BUILD CONTEXT
+
+## STATUS: ${currentGate.toUpperCase()}
+
+### Current State
+- Gate: ${currentGate}
+- Iteration: ${iteration}
+- Verify Attempts: ${gateState.verifyAttempts}/3
+
+### Gate Status
+${Object.entries(gateState.gateStatus).map(([gate, status]) => `- ${gate}: ${status}`).join(`
+`)}
+
+---
+Generated: ${new Date().toISOString()}
+`.trim();
+}
+function createCompactingHook(gateManager) {
+  return async (input) => {
+    const sessionId = input.sessionID;
+    const agentName = input.agent;
+    if (!sessionId)
+      return;
+    if (!isSharkAgent(agentName))
+      return;
+    try {
+      const sharkDir = path10.join(process.cwd(), ".shark");
+      const autoInjectDir = path10.join(sharkDir, "auto-inject");
+      if (!fs10.existsSync(sharkDir)) {
+        fs10.mkdirSync(sharkDir, { recursive: true });
+      }
+      if (!fs10.existsSync(autoInjectDir)) {
+        fs10.mkdirSync(autoInjectDir, { recursive: true });
+      }
+      const context = generateBuildContext(gateManager);
+      const primaryPath = path10.join(autoInjectDir, "BUILD_CONTEXT.md");
+      fs10.writeFileSync(primaryPath, context, "utf-8");
+      const legacyPath = path10.join(sharkDir, BUILD_CONTEXT_FILE2);
+      fs10.writeFileSync(legacyPath, context, "utf-8");
+      const reminderPath = path10.join(sharkDir, "build-reminder.txt");
+      fs10.writeFileSync(reminderPath, `Status: ${gateManager.getCurrentGate()} | Iteration: ${gateManager.getCurrentIteration()}`, "utf-8");
+    } catch (err) {}
+  };
+}
+
+// src/hooks/v4.1/index.ts
+function createSharkHooks(guardian, gateManager, evidenceCollector, stateStore, messenger) {
+  return {
+    event: createSessionHook(gateManager, evidenceCollector, undefined, stateStore, messenger),
+    "chat.message": createChatMessageHook(),
+    "command.execute.before": createCommandExecuteHook(),
+    "experimental.chat.messages.transform": createMessagesTransformHook(),
+    "tool.execute.before": createGuardianHook(guardian, gateManager),
+    "tool.execute.after": (input, output) => {
+      createToolSummarizerHook()(input, output);
+      createGateHook(gateManager, evidenceCollector, undefined)(input, output);
+    },
+    "experimental.session.compacting": createCompactingHook(gateManager),
+    "experimental.chat.system.transform": createSystemTransformHook(gateManager, undefined)
+  };
+}
 
 // src/tools/shark-status.ts
 import { tool } from "@opencode-ai/plugin";
@@ -1073,6 +4168,7 @@ __export(exports_external, {
   iso: () => exports_iso,
   ipv6: () => ipv62,
   ipv4: () => ipv42,
+  invertCodec: () => invertCodec,
   intersection: () => intersection,
   int64: () => int64,
   int32: () => int32,
@@ -1151,6 +4247,7 @@ __export(exports_external, {
   ZodRealError: () => ZodRealError,
   ZodReadonly: () => ZodReadonly,
   ZodPromise: () => ZodPromise,
+  ZodPreprocess: () => ZodPreprocess,
   ZodPrefault: () => ZodPrefault,
   ZodPipe: () => ZodPipe,
   ZodOptional: () => ZodOptional,
@@ -1411,6 +4508,7 @@ __export(exports_core2, {
   $ZodRealError: () => $ZodRealError,
   $ZodReadonly: () => $ZodReadonly,
   $ZodPromise: () => $ZodPromise,
+  $ZodPreprocess: () => $ZodPreprocess,
   $ZodPrefault: () => $ZodPrefault,
   $ZodPipe: () => $ZodPipe,
   $ZodOptional: () => $ZodOptional,
@@ -1491,7 +4589,8 @@ __export(exports_core2, {
 });
 
 // node_modules/zod/v4/core/core.js
-var NEVER = Object.freeze({
+var _a;
+var NEVER = /* @__PURE__ */ Object.freeze({
   status: "aborted"
 });
 function $constructor(name, initializer, params) {
@@ -1526,10 +4625,10 @@ function $constructor(name, initializer, params) {
   }
   Object.defineProperty(Definition, "name", { value: name });
   function _(def) {
-    var _a;
+    var _a2;
     const inst = params?.Parent ? new Definition : this;
     init(inst, def);
-    (_a = inst._zod).deferred ?? (_a.deferred = []);
+    (_a2 = inst._zod).deferred ?? (_a2.deferred = []);
     for (const fn of inst._zod.deferred) {
       fn();
     }
@@ -1560,7 +4659,8 @@ class $ZodEncodeError extends Error {
     this.name = "ZodEncodeError";
   }
 }
-var globalConfig = {};
+(_a = globalThis).__zod_globalConfig ?? (_a.__zod_globalConfig = {});
+var globalConfig = globalThis.__zod_globalConfig;
 function config(newConfig) {
   if (newConfig)
     Object.assign(globalConfig, newConfig);
@@ -1608,6 +4708,7 @@ __export(exports_util, {
   floatSafeRemainder: () => floatSafeRemainder,
   finalizeIssue: () => finalizeIssue,
   extend: () => extend,
+  explicitlyAborted: () => explicitlyAborted,
   escapeRegex: () => escapeRegex,
   esc: () => esc,
   defineLazy: () => defineLazy,
@@ -1678,21 +4779,14 @@ function cleanRegex(source) {
   return source.slice(start, end);
 }
 function floatSafeRemainder(val, step) {
-  const valDecCount = (val.toString().split(".")[1] || "").length;
-  const stepString = step.toString();
-  let stepDecCount = (stepString.split(".")[1] || "").length;
-  if (stepDecCount === 0 && /\d?e-\d?/.test(stepString)) {
-    const match = stepString.match(/\d?e-(\d?)/);
-    if (match?.[1]) {
-      stepDecCount = Number.parseInt(match[1]);
-    }
-  }
-  const decCount = valDecCount > stepDecCount ? valDecCount : stepDecCount;
-  const valInt = Number.parseInt(val.toFixed(decCount).replace(".", ""));
-  const stepInt = Number.parseInt(step.toFixed(decCount).replace(".", ""));
-  return valInt % stepInt / 10 ** decCount;
+  const ratio = val / step;
+  const roundedRatio = Math.round(ratio);
+  const tolerance = Number.EPSILON * Math.max(Math.abs(ratio), 1);
+  if (Math.abs(ratio - roundedRatio) < tolerance)
+    return 0;
+  return ratio - roundedRatio;
 }
-var EVALUATING = Symbol("evaluating");
+var EVALUATING = /* @__PURE__ */ Symbol("evaluating");
 function defineLazy(object, key, getter) {
   let value = undefined;
   Object.defineProperty(object, key, {
@@ -1736,10 +4830,10 @@ function mergeDefs(...defs) {
 function cloneDef(schema) {
   return mergeDefs(schema._zod.def);
 }
-function getElementAtPath(obj, path2) {
-  if (!path2)
+function getElementAtPath(obj, path11) {
+  if (!path11)
     return obj;
-  return path2.reduce((acc, key) => acc?.[key], obj);
+  return path11.reduce((acc, key) => acc?.[key], obj);
 }
 function promiseAllObject(promisesObj) {
   const keys = Object.keys(promisesObj);
@@ -1770,7 +4864,10 @@ var captureStackTrace = "captureStackTrace" in Error ? Error.captureStackTrace :
 function isObject(data) {
   return typeof data === "object" && data !== null && !Array.isArray(data);
 }
-var allowsEval = cached(() => {
+var allowsEval = /* @__PURE__ */ cached(() => {
+  if (globalConfig.jitless) {
+    return false;
+  }
   if (typeof navigator !== "undefined" && navigator?.userAgent?.includes("Cloudflare")) {
     return false;
   }
@@ -1803,6 +4900,10 @@ function shallowClone(o) {
     return { ...o };
   if (Array.isArray(o))
     return [...o];
+  if (o instanceof Map)
+    return new Map(o);
+  if (o instanceof Set)
+    return new Set(o);
   return o;
 }
 function numKeys(data) {
@@ -1858,8 +4959,15 @@ var getParsedType = (data) => {
       throw new Error(`Unknown data type: ${t}`);
   }
 };
-var propertyKeyTypes = new Set(["string", "number", "symbol"]);
-var primitiveTypes = new Set(["string", "number", "bigint", "boolean", "symbol", "undefined"]);
+var propertyKeyTypes = /* @__PURE__ */ new Set(["string", "number", "symbol"]);
+var primitiveTypes = /* @__PURE__ */ new Set([
+  "string",
+  "number",
+  "bigint",
+  "boolean",
+  "symbol",
+  "undefined"
+]);
 function escapeRegex(str) {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -2028,6 +5136,9 @@ function safeExtend(schema, shape) {
   return clone(schema, def);
 }
 function merge(a, b) {
+  if (a._zod.def.checks?.length) {
+    throw new Error(".merge() cannot be used on object schemas containing refinements. Use .safeExtend() instead.");
+  }
   const def = mergeDefs(a._zod.def, {
     get shape() {
       const _shape = { ...a._zod.def.shape, ...b._zod.def.shape };
@@ -2037,7 +5148,7 @@ function merge(a, b) {
     get catchall() {
       return b._zod.def.catchall;
     },
-    checks: []
+    checks: b._zod.def.checks ?? []
   });
   return clone(a, def);
 }
@@ -2120,11 +5231,21 @@ function aborted(x, startIndex = 0) {
   }
   return false;
 }
-function prefixIssues(path2, issues) {
+function explicitlyAborted(x, startIndex = 0) {
+  if (x.aborted === true)
+    return true;
+  for (let i = startIndex;i < x.issues.length; i++) {
+    if (x.issues[i]?.continue === false) {
+      return true;
+    }
+  }
+  return false;
+}
+function prefixIssues(path11, issues) {
   return issues.map((iss) => {
-    var _a;
-    (_a = iss).path ?? (_a.path = []);
-    iss.path.unshift(path2);
+    var _a2;
+    (_a2 = iss).path ?? (_a2.path = []);
+    iss.path.unshift(path11);
     return iss;
   });
 }
@@ -2132,17 +5253,14 @@ function unwrapMessage(message) {
   return typeof message === "string" ? message : message?.message;
 }
 function finalizeIssue(iss, ctx, config2) {
-  const full = { ...iss, path: iss.path ?? [] };
-  if (!iss.message) {
-    const message = unwrapMessage(iss.inst?._zod.def?.error?.(iss)) ?? unwrapMessage(ctx?.error?.(iss)) ?? unwrapMessage(config2.customError?.(iss)) ?? unwrapMessage(config2.localeError?.(iss)) ?? "Invalid input";
-    full.message = message;
+  const message = iss.message ? iss.message : unwrapMessage(iss.inst?._zod.def?.error?.(iss)) ?? unwrapMessage(ctx?.error?.(iss)) ?? unwrapMessage(config2.customError?.(iss)) ?? unwrapMessage(config2.localeError?.(iss)) ?? "Invalid input";
+  const { inst: _inst, continue: _continue, input: _input, ...rest } = iss;
+  rest.path ?? (rest.path = []);
+  rest.message = message;
+  if (ctx?.reportInput) {
+    rest.input = _input;
   }
-  delete full.inst;
-  delete full.continue;
-  if (!ctx?.reportInput) {
-    delete full.input;
-  }
-  return full;
+  return rest;
 }
 function getSizableOrigin(input) {
   if (input instanceof Set)
@@ -2259,10 +5377,10 @@ var initializer = (inst, def) => {
 };
 var $ZodError = $constructor("$ZodError", initializer);
 var $ZodRealError = $constructor("$ZodError", initializer, { Parent: Error });
-function flattenError(error2, mapper = (issue2) => issue2.message) {
+function flattenError(error, mapper = (issue2) => issue2.message) {
   const fieldErrors = {};
   const formErrors = [];
-  for (const sub of error2.issues) {
+  for (const sub of error.issues) {
     if (sub.path.length > 0) {
       fieldErrors[sub.path[0]] = fieldErrors[sub.path[0]] || [];
       fieldErrors[sub.path[0]].push(mapper(sub));
@@ -2272,52 +5390,55 @@ function flattenError(error2, mapper = (issue2) => issue2.message) {
   }
   return { formErrors, fieldErrors };
 }
-function formatError(error2, mapper = (issue2) => issue2.message) {
+function formatError(error, mapper = (issue2) => issue2.message) {
   const fieldErrors = { _errors: [] };
-  const processError = (error3) => {
-    for (const issue2 of error3.issues) {
+  const processError = (error2, path11 = []) => {
+    for (const issue2 of error2.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues });
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues });
-      } else if (issue2.path.length === 0) {
-        fieldErrors._errors.push(mapper(issue2));
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        let curr = fieldErrors;
-        let i = 0;
-        while (i < issue2.path.length) {
-          const el = issue2.path[i];
-          const terminal = i === issue2.path.length - 1;
-          if (!terminal) {
-            curr[el] = curr[el] || { _errors: [] };
-          } else {
-            curr[el] = curr[el] || { _errors: [] };
-            curr[el]._errors.push(mapper(issue2));
+        const fullpath = [...path11, ...issue2.path];
+        if (fullpath.length === 0) {
+          fieldErrors._errors.push(mapper(issue2));
+        } else {
+          let curr = fieldErrors;
+          let i = 0;
+          while (i < fullpath.length) {
+            const el = fullpath[i];
+            const terminal = i === fullpath.length - 1;
+            if (!terminal) {
+              curr[el] = curr[el] || { _errors: [] };
+            } else {
+              curr[el] = curr[el] || { _errors: [] };
+              curr[el]._errors.push(mapper(issue2));
+            }
+            curr = curr[el];
+            i++;
           }
-          curr = curr[el];
-          i++;
         }
       }
     }
   };
-  processError(error2);
+  processError(error);
   return fieldErrors;
 }
-function treeifyError(error2, mapper = (issue2) => issue2.message) {
+function treeifyError(error, mapper = (issue2) => issue2.message) {
   const result = { errors: [] };
-  const processError = (error3, path2 = []) => {
-    var _a, _b;
-    for (const issue2 of error3.issues) {
+  const processError = (error2, path11 = []) => {
+    var _a2, _b;
+    for (const issue2 of error2.issues) {
       if (issue2.code === "invalid_union" && issue2.errors.length) {
-        issue2.errors.map((issues) => processError({ issues }, issue2.path));
+        issue2.errors.map((issues) => processError({ issues }, [...path11, ...issue2.path]));
       } else if (issue2.code === "invalid_key") {
-        processError({ issues: issue2.issues }, issue2.path);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else if (issue2.code === "invalid_element") {
-        processError({ issues: issue2.issues }, issue2.path);
+        processError({ issues: issue2.issues }, [...path11, ...issue2.path]);
       } else {
-        const fullpath = [...path2, ...issue2.path];
+        const fullpath = [...path11, ...issue2.path];
         if (fullpath.length === 0) {
           result.errors.push(mapper(issue2));
           continue;
@@ -2329,7 +5450,7 @@ function treeifyError(error2, mapper = (issue2) => issue2.message) {
           const terminal = i === fullpath.length - 1;
           if (typeof el === "string") {
             curr.properties ?? (curr.properties = {});
-            (_a = curr.properties)[el] ?? (_a[el] = { errors: [] });
+            (_a2 = curr.properties)[el] ?? (_a2[el] = { errors: [] });
             curr = curr.properties[el];
           } else {
             curr.items ?? (curr.items = []);
@@ -2344,13 +5465,13 @@ function treeifyError(error2, mapper = (issue2) => issue2.message) {
       }
     }
   };
-  processError(error2);
+  processError(error);
   return result;
 }
 function toDotPath(_path) {
   const segs = [];
-  const path2 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
-  for (const seg of path2) {
+  const path11 = _path.map((seg) => typeof seg === "object" ? seg.key : seg);
+  for (const seg of path11) {
     if (typeof seg === "number")
       segs.push(`[${seg}]`);
     else if (typeof seg === "symbol")
@@ -2365,9 +5486,9 @@ function toDotPath(_path) {
   }
   return segs.join("");
 }
-function prettifyError(error2) {
+function prettifyError(error) {
   const lines = [];
-  const issues = [...error2.issues].sort((a, b) => (a.path ?? []).length - (b.path ?? []).length);
+  const issues = [...error.issues].sort((a, b) => (a.path ?? []).length - (b.path ?? []).length);
   for (const issue2 of issues) {
     lines.push(`\u2716 ${issue2.message}`);
     if (issue2.path?.length)
@@ -2379,7 +5500,7 @@ function prettifyError(error2) {
 
 // node_modules/zod/v4/core/parse.js
 var _parse = (_Err) => (schema, value, _ctx, _params) => {
-  const ctx = _ctx ? Object.assign(_ctx, { async: false }) : { async: false };
+  const ctx = _ctx ? { ..._ctx, async: false } : { async: false };
   const result = schema._zod.run({ value, issues: [] }, ctx);
   if (result instanceof Promise) {
     throw new $ZodAsyncError;
@@ -2393,7 +5514,7 @@ var _parse = (_Err) => (schema, value, _ctx, _params) => {
 };
 var parse = /* @__PURE__ */ _parse($ZodRealError);
 var _parseAsync = (_Err) => async (schema, value, _ctx, params) => {
-  const ctx = _ctx ? Object.assign(_ctx, { async: true }) : { async: true };
+  const ctx = _ctx ? { ..._ctx, async: true } : { async: true };
   let result = schema._zod.run({ value, issues: [] }, ctx);
   if (result instanceof Promise)
     result = await result;
@@ -2418,7 +5539,7 @@ var _safeParse = (_Err) => (schema, value, _ctx) => {
 };
 var safeParse = /* @__PURE__ */ _safeParse($ZodRealError);
 var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
-  const ctx = _ctx ? Object.assign(_ctx, { async: true }) : { async: true };
+  const ctx = _ctx ? { ..._ctx, async: true } : { async: true };
   let result = schema._zod.run({ value, issues: [] }, ctx);
   if (result instanceof Promise)
     result = await result;
@@ -2429,7 +5550,7 @@ var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
 };
 var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError);
 var _encode = (_Err) => (schema, value, _ctx) => {
-  const ctx = _ctx ? Object.assign(_ctx, { direction: "backward" }) : { direction: "backward" };
+  const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
   return _parse(_Err)(schema, value, ctx);
 };
 var encode = /* @__PURE__ */ _encode($ZodRealError);
@@ -2438,7 +5559,7 @@ var _decode = (_Err) => (schema, value, _ctx) => {
 };
 var decode = /* @__PURE__ */ _decode($ZodRealError);
 var _encodeAsync = (_Err) => async (schema, value, _ctx) => {
-  const ctx = _ctx ? Object.assign(_ctx, { direction: "backward" }) : { direction: "backward" };
+  const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
   return _parseAsync(_Err)(schema, value, ctx);
 };
 var encodeAsync = /* @__PURE__ */ _encodeAsync($ZodRealError);
@@ -2447,7 +5568,7 @@ var _decodeAsync = (_Err) => async (schema, value, _ctx) => {
 };
 var decodeAsync = /* @__PURE__ */ _decodeAsync($ZodRealError);
 var _safeEncode = (_Err) => (schema, value, _ctx) => {
-  const ctx = _ctx ? Object.assign(_ctx, { direction: "backward" }) : { direction: "backward" };
+  const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
   return _safeParse(_Err)(schema, value, ctx);
 };
 var safeEncode = /* @__PURE__ */ _safeEncode($ZodRealError);
@@ -2456,7 +5577,7 @@ var _safeDecode = (_Err) => (schema, value, _ctx) => {
 };
 var safeDecode = /* @__PURE__ */ _safeDecode($ZodRealError);
 var _safeEncodeAsync = (_Err) => async (schema, value, _ctx) => {
-  const ctx = _ctx ? Object.assign(_ctx, { direction: "backward" }) : { direction: "backward" };
+  const ctx = _ctx ? { ..._ctx, direction: "backward" } : { direction: "backward" };
   return _safeParseAsync(_Err)(schema, value, ctx);
 };
 var safeEncodeAsync = /* @__PURE__ */ _safeEncodeAsync($ZodRealError);
@@ -2504,6 +5625,7 @@ __export(exports_regexes, {
   ipv4: () => ipv4,
   integer: () => integer,
   idnEmail: () => idnEmail,
+  httpProtocol: () => httpProtocol,
   html5Email: () => html5Email,
   hostname: () => hostname,
   hex: () => hex,
@@ -2526,7 +5648,7 @@ __export(exports_regexes, {
   base64url: () => base64url,
   base64: () => base64
 });
-var cuid = /^[cC][^\s-]{8,}$/;
+var cuid = /^[cC][0-9a-z]{6,}$/;
 var cuid2 = /^[0-9a-z]+$/;
 var ulid = /^[0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{26}$/;
 var xid = /^[0-9a-vA-V]{20}$/;
@@ -2565,6 +5687,7 @@ var base64 = /^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/
 var base64url = /^[A-Za-z0-9_-]*$/;
 var hostname = /^(?=.{1,253}\.?$)[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[-0-9a-zA-Z]{0,61}[0-9a-zA-Z])?)*\.?$/;
 var domain = /^([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+[a-zA-Z]{2,}$/;
+var httpProtocol = /^https?$/;
 var e164 = /^\+[1-9]\d{6,14}$/;
 var dateSource = `(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))`;
 var date = /* @__PURE__ */ new RegExp(`^${dateSource}$`);
@@ -2623,10 +5746,10 @@ var sha512_base64url = /* @__PURE__ */ fixedBase64url(86);
 
 // node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor("$ZodCheck", (inst, def) => {
-  var _a;
+  var _a2;
   inst._zod ?? (inst._zod = {});
   inst._zod.def = def;
-  (_a = inst._zod).onattach ?? (_a.onattach = []);
+  (_a2 = inst._zod).onattach ?? (_a2.onattach = []);
 });
 var numericOriginMap = {
   number: "number",
@@ -2692,8 +5815,8 @@ var $ZodCheckGreaterThan = /* @__PURE__ */ $constructor("$ZodCheckGreaterThan", 
 var $ZodCheckMultipleOf = /* @__PURE__ */ $constructor("$ZodCheckMultipleOf", (inst, def) => {
   $ZodCheck.init(inst, def);
   inst._zod.onattach.push((inst2) => {
-    var _a;
-    (_a = inst2._zod.bag).multipleOf ?? (_a.multipleOf = def.value);
+    var _a2;
+    (_a2 = inst2._zod.bag).multipleOf ?? (_a2.multipleOf = def.value);
   });
   inst._zod.check = (payload) => {
     if (typeof payload.value !== typeof def.value)
@@ -2826,9 +5949,9 @@ var $ZodCheckBigIntFormat = /* @__PURE__ */ $constructor("$ZodCheckBigIntFormat"
   };
 });
 var $ZodCheckMaxSize = /* @__PURE__ */ $constructor("$ZodCheckMaxSize", (inst, def) => {
-  var _a;
+  var _a2;
   $ZodCheck.init(inst, def);
-  (_a = inst._zod.def).when ?? (_a.when = (payload) => {
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.size !== undefined;
   });
@@ -2854,9 +5977,9 @@ var $ZodCheckMaxSize = /* @__PURE__ */ $constructor("$ZodCheckMaxSize", (inst, d
   };
 });
 var $ZodCheckMinSize = /* @__PURE__ */ $constructor("$ZodCheckMinSize", (inst, def) => {
-  var _a;
+  var _a2;
   $ZodCheck.init(inst, def);
-  (_a = inst._zod.def).when ?? (_a.when = (payload) => {
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.size !== undefined;
   });
@@ -2882,9 +6005,9 @@ var $ZodCheckMinSize = /* @__PURE__ */ $constructor("$ZodCheckMinSize", (inst, d
   };
 });
 var $ZodCheckSizeEquals = /* @__PURE__ */ $constructor("$ZodCheckSizeEquals", (inst, def) => {
-  var _a;
+  var _a2;
   $ZodCheck.init(inst, def);
-  (_a = inst._zod.def).when ?? (_a.when = (payload) => {
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.size !== undefined;
   });
@@ -2912,9 +6035,9 @@ var $ZodCheckSizeEquals = /* @__PURE__ */ $constructor("$ZodCheckSizeEquals", (i
   };
 });
 var $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (inst, def) => {
-  var _a;
+  var _a2;
   $ZodCheck.init(inst, def);
-  (_a = inst._zod.def).when ?? (_a.when = (payload) => {
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.length !== undefined;
   });
@@ -2941,9 +6064,9 @@ var $ZodCheckMaxLength = /* @__PURE__ */ $constructor("$ZodCheckMaxLength", (ins
   };
 });
 var $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (inst, def) => {
-  var _a;
+  var _a2;
   $ZodCheck.init(inst, def);
-  (_a = inst._zod.def).when ?? (_a.when = (payload) => {
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.length !== undefined;
   });
@@ -2970,9 +6093,9 @@ var $ZodCheckMinLength = /* @__PURE__ */ $constructor("$ZodCheckMinLength", (ins
   };
 });
 var $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals", (inst, def) => {
-  var _a;
+  var _a2;
   $ZodCheck.init(inst, def);
-  (_a = inst._zod.def).when ?? (_a.when = (payload) => {
+  (_a2 = inst._zod.def).when ?? (_a2.when = (payload) => {
     const val = payload.value;
     return !nullish(val) && val.length !== undefined;
   });
@@ -3001,7 +6124,7 @@ var $ZodCheckLengthEquals = /* @__PURE__ */ $constructor("$ZodCheckLengthEquals"
   };
 });
 var $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringFormat", (inst, def) => {
-  var _a, _b;
+  var _a2, _b;
   $ZodCheck.init(inst, def);
   inst._zod.onattach.push((inst2) => {
     const bag = inst2._zod.bag;
@@ -3012,7 +6135,7 @@ var $ZodCheckStringFormat = /* @__PURE__ */ $constructor("$ZodCheckStringFormat"
     }
   });
   if (def.pattern)
-    (_a = inst._zod).check ?? (_a.check = (payload) => {
+    (_a2 = inst._zod).check ?? (_a2.check = (payload) => {
       def.pattern.lastIndex = 0;
       if (def.pattern.test(payload.value))
         return;
@@ -3209,13 +6332,13 @@ class Doc {
 // node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
-  minor: 3,
-  patch: 6
+  minor: 4,
+  patch: 3
 };
 
 // node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
-  var _a;
+  var _a2;
   inst ?? (inst = {});
   inst._zod.def = def;
   inst._zod.bag = inst._zod.bag || {};
@@ -3230,7 +6353,7 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
     }
   }
   if (checks.length === 0) {
-    (_a = inst._zod).deferred ?? (_a.deferred = []);
+    (_a2 = inst._zod).deferred ?? (_a2.deferred = []);
     inst._zod.deferred?.push(() => {
       inst._zod.run = inst._zod.parse;
     });
@@ -3240,6 +6363,8 @@ var $ZodType = /* @__PURE__ */ $constructor("$ZodType", (inst, def) => {
       let asyncResult;
       for (const ch of checks2) {
         if (ch._zod.def.when) {
+          if (explicitlyAborted(payload))
+            continue;
           const shouldRun = ch._zod.def.when(payload);
           if (!shouldRun)
             continue;
@@ -3379,6 +6504,19 @@ var $ZodURL = /* @__PURE__ */ $constructor("$ZodURL", (inst, def) => {
   inst._zod.check = (payload) => {
     try {
       const trimmed = payload.value.trim();
+      if (!def.normalize && def.protocol?.source === httpProtocol.source) {
+        if (!/^https?:\/\//i.test(trimmed)) {
+          payload.issues.push({
+            code: "invalid_format",
+            format: "url",
+            note: "Invalid URL format",
+            input: payload.value,
+            inst,
+            continue: !def.abort
+          });
+          return;
+        }
+      }
       const url = new URL(trimmed);
       if (def.hostname) {
         def.hostname.lastIndex = 0;
@@ -3532,6 +6670,8 @@ var $ZodCIDRv6 = /* @__PURE__ */ $constructor("$ZodCIDRv6", (inst, def) => {
 function isValidBase64(data) {
   if (data === "")
     return true;
+  if (/\s/.test(data))
+    return false;
   if (data.length % 4 !== 0)
     return false;
   try {
@@ -3721,8 +6861,6 @@ var $ZodUndefined = /* @__PURE__ */ $constructor("$ZodUndefined", (inst, def) =>
   $ZodType.init(inst, def);
   inst._zod.pattern = _undefined;
   inst._zod.values = new Set([undefined]);
-  inst._zod.optin = "optional";
-  inst._zod.optout = "optional";
   inst._zod.parse = (payload, _ctx) => {
     const input = payload.value;
     if (typeof input === "undefined")
@@ -3850,15 +6988,27 @@ var $ZodArray = /* @__PURE__ */ $constructor("$ZodArray", (inst, def) => {
     return payload;
   };
 });
-function handlePropertyResult(result, final, key, input, isOptionalOut) {
+function handlePropertyResult(result, final, key, input, isOptionalIn, isOptionalOut) {
+  const isPresent = key in input;
   if (result.issues.length) {
-    if (isOptionalOut && !(key in input)) {
+    if (isOptionalIn && isOptionalOut && !isPresent) {
       return;
     }
     final.issues.push(...prefixIssues(key, result.issues));
   }
+  if (!isPresent && !isOptionalIn) {
+    if (!result.issues.length) {
+      final.issues.push({
+        code: "invalid_type",
+        expected: "nonoptional",
+        input: undefined,
+        path: [key]
+      });
+    }
+    return;
+  }
   if (result.value === undefined) {
-    if (key in input) {
+    if (isPresent) {
       final.value[key] = undefined;
     }
   } else {
@@ -3886,8 +7036,11 @@ function handleCatchall(proms, input, payload, ctx, def, inst) {
   const keySet = def.keySet;
   const _catchall = def.catchall._zod;
   const t = _catchall.def.type;
+  const isOptionalIn = _catchall.optin === "optional";
   const isOptionalOut = _catchall.optout === "optional";
   for (const key in input) {
+    if (key === "__proto__")
+      continue;
     if (keySet.has(key))
       continue;
     if (t === "never") {
@@ -3896,9 +7049,9 @@ function handleCatchall(proms, input, payload, ctx, def, inst) {
     }
     const r = _catchall.run({ value: input[key], issues: [] }, ctx);
     if (r instanceof Promise) {
-      proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalOut)));
+      proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalIn, isOptionalOut)));
     } else {
-      handlePropertyResult(r, payload, key, input, isOptionalOut);
+      handlePropertyResult(r, payload, key, input, isOptionalIn, isOptionalOut);
     }
   }
   if (unrecognized.length) {
@@ -3964,12 +7117,13 @@ var $ZodObject = /* @__PURE__ */ $constructor("$ZodObject", (inst, def) => {
     const shape = value.shape;
     for (const key of value.keys) {
       const el = shape[key];
+      const isOptionalIn = el._zod.optin === "optional";
       const isOptionalOut = el._zod.optout === "optional";
       const r = el._zod.run({ value: input[key], issues: [] }, ctx);
       if (r instanceof Promise) {
-        proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalOut)));
+        proms.push(r.then((r2) => handlePropertyResult(r2, payload, key, input, isOptionalIn, isOptionalOut)));
       } else {
-        handlePropertyResult(r, payload, key, input, isOptionalOut);
+        handlePropertyResult(r, payload, key, input, isOptionalIn, isOptionalOut);
       }
     }
     if (!catchall) {
@@ -4000,9 +7154,10 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
       const id = ids[key];
       const k = esc(key);
       const schema = shape[key];
+      const isOptionalIn = schema?._zod?.optin === "optional";
       const isOptionalOut = schema?._zod?.optout === "optional";
       doc.write(`const ${id} = ${parseStr(key)};`);
-      if (isOptionalOut) {
+      if (isOptionalIn && isOptionalOut) {
         doc.write(`
         if (${id}.issues.length) {
           if (${k} in input) {
@@ -4021,6 +7176,33 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor("$ZodObjectJIT", (inst, def) =>
           newResult[${k}] = ${id}.value;
         }
         
+      `);
+      } else if (!isOptionalIn) {
+        doc.write(`
+        const ${id}_present = ${k} in input;
+        if (${id}.issues.length) {
+          payload.issues = payload.issues.concat(${id}.issues.map(iss => ({
+            ...iss,
+            path: iss.path ? [${k}, ...iss.path] : [${k}]
+          })));
+        }
+        if (!${id}_present && !${id}.issues.length) {
+          payload.issues.push({
+            code: "invalid_type",
+            expected: "nonoptional",
+            input: undefined,
+            path: [${k}]
+          });
+        }
+
+        if (${id}_present) {
+          if (${id}.value === undefined) {
+            newResult[${k}] = undefined;
+          } else {
+            newResult[${k}] = ${id}.value;
+          }
+        }
+
       `);
       } else {
         doc.write(`
@@ -4114,10 +7296,9 @@ var $ZodUnion = /* @__PURE__ */ $constructor("$ZodUnion", (inst, def) => {
     }
     return;
   });
-  const single = def.options.length === 1;
-  const first = def.options[0]._zod.run;
+  const first = def.options.length === 1 ? def.options[0]._zod.run : null;
   inst._zod.parse = (payload, ctx) => {
-    if (single) {
+    if (first) {
       return first(payload, ctx);
     }
     let async = false;
@@ -4170,10 +7351,9 @@ function handleExclusiveUnionResults(results, final, inst, ctx) {
 var $ZodXor = /* @__PURE__ */ $constructor("$ZodXor", (inst, def) => {
   $ZodUnion.init(inst, def);
   def.inclusive = false;
-  const single = def.options.length === 1;
-  const first = def.options[0]._zod.run;
+  const first = def.options.length === 1 ? def.options[0]._zod.run : null;
   inst._zod.parse = (payload, ctx) => {
-    if (single) {
+    if (first) {
       return first(payload, ctx);
     }
     let async = false;
@@ -4248,7 +7428,7 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("$ZodDiscriminatedUnio
     if (opt) {
       return opt._zod.run(payload, ctx);
     }
-    if (def.unionFallback) {
+    if (def.unionFallback || ctx.direction === "backward") {
       return _super(payload, ctx);
     }
     payload.issues.push({
@@ -4256,6 +7436,7 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor("$ZodDiscriminatedUnio
       errors: [],
       note: "No matching discriminator",
       discriminator: def.discriminator,
+      options: Array.from(disc.value.keys()),
       input,
       path: [def.discriminator],
       inst
@@ -4377,63 +7558,95 @@ var $ZodTuple = /* @__PURE__ */ $constructor("$ZodTuple", (inst, def) => {
     }
     payload.value = [];
     const proms = [];
-    const reversedIndex = [...items].reverse().findIndex((item) => item._zod.optin !== "optional");
-    const optStart = reversedIndex === -1 ? 0 : items.length - reversedIndex;
+    const optinStart = getTupleOptStart(items, "optin");
+    const optoutStart = getTupleOptStart(items, "optout");
     if (!def.rest) {
-      const tooBig = input.length > items.length;
-      const tooSmall = input.length < optStart - 1;
-      if (tooBig || tooSmall) {
+      if (input.length < optinStart) {
         payload.issues.push({
-          ...tooBig ? { code: "too_big", maximum: items.length, inclusive: true } : { code: "too_small", minimum: items.length },
+          code: "too_small",
+          minimum: optinStart,
+          inclusive: true,
           input,
           inst,
           origin: "array"
         });
         return payload;
       }
-    }
-    let i = -1;
-    for (const item of items) {
-      i++;
-      if (i >= input.length) {
-        if (i >= optStart)
-          continue;
+      if (input.length > items.length) {
+        payload.issues.push({
+          code: "too_big",
+          maximum: items.length,
+          inclusive: true,
+          input,
+          inst,
+          origin: "array"
+        });
       }
-      const result = item._zod.run({
-        value: input[i],
-        issues: []
-      }, ctx);
-      if (result instanceof Promise) {
-        proms.push(result.then((result2) => handleTupleResult(result2, payload, i)));
+    }
+    const itemResults = new Array(items.length);
+    for (let i = 0;i < items.length; i++) {
+      const r = items[i]._zod.run({ value: input[i], issues: [] }, ctx);
+      if (r instanceof Promise) {
+        proms.push(r.then((rr) => {
+          itemResults[i] = rr;
+        }));
       } else {
-        handleTupleResult(result, payload, i);
+        itemResults[i] = r;
       }
     }
     if (def.rest) {
+      let i = items.length - 1;
       const rest = input.slice(items.length);
       for (const el of rest) {
         i++;
-        const result = def.rest._zod.run({
-          value: el,
-          issues: []
-        }, ctx);
+        const result = def.rest._zod.run({ value: el, issues: [] }, ctx);
         if (result instanceof Promise) {
-          proms.push(result.then((result2) => handleTupleResult(result2, payload, i)));
+          proms.push(result.then((r) => handleTupleResult(r, payload, i)));
         } else {
           handleTupleResult(result, payload, i);
         }
       }
     }
-    if (proms.length)
-      return Promise.all(proms).then(() => payload);
-    return payload;
+    if (proms.length) {
+      return Promise.all(proms).then(() => handleTupleResults(itemResults, payload, items, input, optoutStart));
+    }
+    return handleTupleResults(itemResults, payload, items, input, optoutStart);
   };
 });
+function getTupleOptStart(items, key) {
+  for (let i = items.length - 1;i >= 0; i--) {
+    if (items[i]._zod[key] !== "optional")
+      return i + 1;
+  }
+  return 0;
+}
 function handleTupleResult(result, final, index) {
   if (result.issues.length) {
     final.issues.push(...prefixIssues(index, result.issues));
   }
   final.value[index] = result.value;
+}
+function handleTupleResults(itemResults, final, items, input, optoutStart) {
+  for (let i = 0;i < items.length; i++) {
+    const r = itemResults[i];
+    const isPresent = i < input.length;
+    if (r.issues.length) {
+      if (!isPresent && i >= optoutStart) {
+        final.value.length = i;
+        break;
+      }
+      final.issues.push(...prefixIssues(i, r.issues));
+    }
+    final.value[i] = r.value;
+  }
+  for (let i = final.value.length - 1;i >= input.length; i--) {
+    if (items[i]._zod.optout === "optional" && final.value[i] === undefined) {
+      final.value.length = i;
+    } else {
+      break;
+    }
+  }
+  return final;
 }
 var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
   $ZodType.init(inst, def);
@@ -4456,19 +7669,35 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
       for (const key of values) {
         if (typeof key === "string" || typeof key === "number" || typeof key === "symbol") {
           recordKeys.add(typeof key === "number" ? key.toString() : key);
+          const keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
+          if (keyResult instanceof Promise) {
+            throw new Error("Async schemas not supported in object keys currently");
+          }
+          if (keyResult.issues.length) {
+            payload.issues.push({
+              code: "invalid_key",
+              origin: "record",
+              issues: keyResult.issues.map((iss) => finalizeIssue(iss, ctx, config())),
+              input: key,
+              path: [key],
+              inst
+            });
+            continue;
+          }
+          const outKey = keyResult.value;
           const result = def.valueType._zod.run({ value: input[key], issues: [] }, ctx);
           if (result instanceof Promise) {
             proms.push(result.then((result2) => {
               if (result2.issues.length) {
                 payload.issues.push(...prefixIssues(key, result2.issues));
               }
-              payload.value[key] = result2.value;
+              payload.value[outKey] = result2.value;
             }));
           } else {
             if (result.issues.length) {
               payload.issues.push(...prefixIssues(key, result.issues));
             }
-            payload.value[key] = result.value;
+            payload.value[outKey] = result.value;
           }
         }
       }
@@ -4491,6 +7720,8 @@ var $ZodRecord = /* @__PURE__ */ $constructor("$ZodRecord", (inst, def) => {
       payload.value = {};
       for (const key of Reflect.ownKeys(input)) {
         if (key === "__proto__")
+          continue;
+        if (!Object.prototype.propertyIsEnumerable.call(input, key))
           continue;
         let keyResult = def.keyType._zod.run({ value: key, issues: [] }, ctx);
         if (keyResult instanceof Promise) {
@@ -4696,6 +7927,7 @@ var $ZodFile = /* @__PURE__ */ $constructor("$ZodFile", (inst, def) => {
 });
 var $ZodTransform = /* @__PURE__ */ $constructor("$ZodTransform", (inst, def) => {
   $ZodType.init(inst, def);
+  inst._zod.optin = "optional";
   inst._zod.parse = (payload, ctx) => {
     if (ctx.direction === "backward") {
       throw new $ZodEncodeError(inst.constructor.name);
@@ -4705,6 +7937,7 @@ var $ZodTransform = /* @__PURE__ */ $constructor("$ZodTransform", (inst, def) =>
       const output = _out instanceof Promise ? _out : Promise.resolve(_out);
       return output.then((output2) => {
         payload.value = output2;
+        payload.fallback = true;
         return payload;
       });
     }
@@ -4712,11 +7945,12 @@ var $ZodTransform = /* @__PURE__ */ $constructor("$ZodTransform", (inst, def) =>
       throw new $ZodAsyncError;
     }
     payload.value = _out;
+    payload.fallback = true;
     return payload;
   };
 });
 function handleOptionalResult(result, input) {
-  if (result.issues.length && input === undefined) {
+  if (input === undefined && (result.issues.length || result.fallback)) {
     return { issues: [], value: undefined };
   }
   return result;
@@ -4734,10 +7968,11 @@ var $ZodOptional = /* @__PURE__ */ $constructor("$ZodOptional", (inst, def) => {
   });
   inst._zod.parse = (payload, ctx) => {
     if (def.innerType._zod.optin === "optional") {
+      const input = payload.value;
       const result = def.innerType._zod.run(payload, ctx);
       if (result instanceof Promise)
-        return result.then((r) => handleOptionalResult(r, payload.value));
-      return handleOptionalResult(result, payload.value);
+        return result.then((r) => handleOptionalResult(r, input));
+      return handleOptionalResult(result, input);
     }
     if (payload.value === undefined) {
       return payload;
@@ -4853,7 +8088,7 @@ var $ZodSuccess = /* @__PURE__ */ $constructor("$ZodSuccess", (inst, def) => {
 });
 var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
   $ZodType.init(inst, def);
-  defineLazy(inst._zod, "optin", () => def.innerType._zod.optin);
+  inst._zod.optin = "optional";
   defineLazy(inst._zod, "optout", () => def.innerType._zod.optout);
   defineLazy(inst._zod, "values", () => def.innerType._zod.values);
   inst._zod.parse = (payload, ctx) => {
@@ -4873,6 +8108,7 @@ var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
             input: payload.value
           });
           payload.issues = [];
+          payload.fallback = true;
         }
         return payload;
       });
@@ -4887,6 +8123,7 @@ var $ZodCatch = /* @__PURE__ */ $constructor("$ZodCatch", (inst, def) => {
         input: payload.value
       });
       payload.issues = [];
+      payload.fallback = true;
     }
     return payload;
   };
@@ -4932,7 +8169,7 @@ function handlePipeResult(left, next, ctx) {
     left.aborted = true;
     return left;
   }
-  return next._zod.run({ value: left.value, issues: left.issues }, ctx);
+  return next._zod.run({ value: left.value, issues: left.issues, fallback: left.fallback }, ctx);
 }
 var $ZodCodec = /* @__PURE__ */ $constructor("$ZodCodec", (inst, def) => {
   $ZodType.init(inst, def);
@@ -4984,6 +8221,9 @@ function handleCodecTxResult(left, value, nextSchema, ctx) {
   }
   return nextSchema._zod.run({ value, issues: left.issues }, ctx);
 }
+var $ZodPreprocess = /* @__PURE__ */ $constructor("$ZodPreprocess", (inst, def) => {
+  $ZodPipe.init(inst, def);
+});
 var $ZodReadonly = /* @__PURE__ */ $constructor("$ZodReadonly", (inst, def) => {
   $ZodType.init(inst, def);
   defineLazy(inst._zod, "propValues", () => def.innerType._zod.propValues);
@@ -5135,7 +8375,12 @@ var $ZodPromise = /* @__PURE__ */ $constructor("$ZodPromise", (inst, def) => {
 });
 var $ZodLazy = /* @__PURE__ */ $constructor("$ZodLazy", (inst, def) => {
   $ZodType.init(inst, def);
-  defineLazy(inst._zod, "innerType", () => def.getter());
+  defineLazy(inst._zod, "innerType", () => {
+    const d = def;
+    if (!d._cachedInner)
+      d._cachedInner = def.getter();
+    return d._cachedInner;
+  });
   defineLazy(inst._zod, "pattern", () => inst._zod.innerType?._zod?.pattern);
   defineLazy(inst._zod, "propValues", () => inst._zod.innerType?._zod?.propValues);
   defineLazy(inst._zod, "optin", () => inst._zod.innerType?._zod?.optin ?? undefined);
@@ -5192,6 +8437,7 @@ __export(exports_locales, {
   sv: () => sv_default,
   sl: () => sl_default,
   ru: () => ru_default,
+  ro: () => ro_default,
   pt: () => pt_default,
   ps: () => ps_default,
   pl: () => pl_default,
@@ -5211,6 +8457,7 @@ __export(exports_locales, {
   id: () => id_default,
   hy: () => hy_default,
   hu: () => hu_default,
+  hr: () => hr_default,
   he: () => he_default,
   frCA: () => fr_CA_default,
   fr: () => fr_default,
@@ -5219,6 +8466,7 @@ __export(exports_locales, {
   es: () => es_default,
   eo: () => eo_default,
   en: () => en_default,
+  el: () => el_default,
   de: () => de_default,
   da: () => da_default,
   cs: () => cs_default,
@@ -5230,7 +8478,7 @@ __export(exports_locales, {
 });
 
 // node_modules/zod/v4/locales/ar.js
-var error2 = () => {
+var error = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0641", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
     file: { unit: "\u0628\u0627\u064A\u062A", verb: "\u0623\u0646 \u064A\u062D\u0648\u064A" },
@@ -5332,11 +8580,11 @@ var error2 = () => {
 };
 function ar_default() {
   return {
-    localeError: error2()
+    localeError: error()
   };
 }
 // node_modules/zod/v4/locales/az.js
-var error3 = () => {
+var error2 = () => {
   const Sizable = {
     string: { unit: "simvol", verb: "olmal\u0131d\u0131r" },
     file: { unit: "bayt", verb: "olmal\u0131d\u0131r" },
@@ -5437,7 +8685,7 @@ var error3 = () => {
 };
 function az_default() {
   return {
-    localeError: error3()
+    localeError: error2()
   };
 }
 // node_modules/zod/v4/locales/be.js
@@ -5456,7 +8704,7 @@ function getBelarusianPlural(count, one, few, many) {
   }
   return many;
 }
-var error4 = () => {
+var error3 = () => {
   const Sizable = {
     string: {
       unit: {
@@ -5593,11 +8841,11 @@ var error4 = () => {
 };
 function be_default() {
   return {
-    localeError: error4()
+    localeError: error3()
   };
 }
 // node_modules/zod/v4/locales/bg.js
-var error5 = () => {
+var error4 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
     file: { unit: "\u0431\u0430\u0439\u0442\u0430", verb: "\u0434\u0430 \u0441\u044A\u0434\u044A\u0440\u0436\u0430" },
@@ -5713,11 +8961,11 @@ var error5 = () => {
 };
 function bg_default() {
   return {
-    localeError: error5()
+    localeError: error4()
   };
 }
 // node_modules/zod/v4/locales/ca.js
-var error6 = () => {
+var error5 = () => {
   const Sizable = {
     string: { unit: "car\xE0cters", verb: "contenir" },
     file: { unit: "bytes", verb: "contenir" },
@@ -5820,11 +9068,11 @@ var error6 = () => {
 };
 function ca_default() {
   return {
-    localeError: error6()
+    localeError: error5()
   };
 }
 // node_modules/zod/v4/locales/cs.js
-var error7 = () => {
+var error6 = () => {
   const Sizable = {
     string: { unit: "znak\u016F", verb: "m\xEDt" },
     file: { unit: "bajt\u016F", verb: "m\xEDt" },
@@ -5931,11 +9179,11 @@ var error7 = () => {
 };
 function cs_default() {
   return {
-    localeError: error7()
+    localeError: error6()
   };
 }
 // node_modules/zod/v4/locales/da.js
-var error8 = () => {
+var error7 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "havde" },
     file: { unit: "bytes", verb: "havde" },
@@ -6046,11 +9294,11 @@ var error8 = () => {
 };
 function da_default() {
   return {
-    localeError: error8()
+    localeError: error7()
   };
 }
 // node_modules/zod/v4/locales/de.js
-var error9 = () => {
+var error8 = () => {
   const Sizable = {
     string: { unit: "Zeichen", verb: "zu haben" },
     file: { unit: "Bytes", verb: "zu haben" },
@@ -6154,6 +9402,115 @@ var error9 = () => {
 };
 function de_default() {
   return {
+    localeError: error8()
+  };
+}
+// node_modules/zod/v4/locales/el.js
+var error9 = () => {
+  const Sizable = {
+    string: { unit: "\u03C7\u03B1\u03C1\u03B1\u03BA\u03C4\u03AE\u03C1\u03B5\u03C2", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
+    file: { unit: "bytes", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
+    array: { unit: "\u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03B1", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
+    set: { unit: "\u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03B1", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" },
+    map: { unit: "\u03BA\u03B1\u03C4\u03B1\u03C7\u03C9\u03C1\u03AE\u03C3\u03B5\u03B9\u03C2", verb: "\u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9" }
+  };
+  function getSizing(origin) {
+    return Sizable[origin] ?? null;
+  }
+  const FormatDictionary = {
+    regex: "\u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2",
+    email: "\u03B4\u03B9\u03B5\u03CD\u03B8\u03C5\u03BD\u03C3\u03B7 email",
+    url: "URL",
+    emoji: "emoji",
+    uuid: "UUID",
+    uuidv4: "UUIDv4",
+    uuidv6: "UUIDv6",
+    nanoid: "nanoid",
+    guid: "GUID",
+    cuid: "cuid",
+    cuid2: "cuid2",
+    ulid: "ULID",
+    xid: "XID",
+    ksuid: "KSUID",
+    datetime: "ISO \u03B7\u03BC\u03B5\u03C1\u03BF\u03BC\u03B7\u03BD\u03AF\u03B1 \u03BA\u03B1\u03B9 \u03CE\u03C1\u03B1",
+    date: "ISO \u03B7\u03BC\u03B5\u03C1\u03BF\u03BC\u03B7\u03BD\u03AF\u03B1",
+    time: "ISO \u03CE\u03C1\u03B1",
+    duration: "ISO \u03B4\u03B9\u03AC\u03C1\u03BA\u03B5\u03B9\u03B1",
+    ipv4: "\u03B4\u03B9\u03B5\u03CD\u03B8\u03C5\u03BD\u03C3\u03B7 IPv4",
+    ipv6: "\u03B4\u03B9\u03B5\u03CD\u03B8\u03C5\u03BD\u03C3\u03B7 IPv6",
+    mac: "\u03B4\u03B9\u03B5\u03CD\u03B8\u03C5\u03BD\u03C3\u03B7 MAC",
+    cidrv4: "\u03B5\u03CD\u03C1\u03BF\u03C2 IPv4",
+    cidrv6: "\u03B5\u03CD\u03C1\u03BF\u03C2 IPv6",
+    base64: "\u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC \u03BA\u03C9\u03B4\u03B9\u03BA\u03BF\u03C0\u03BF\u03B9\u03B7\u03BC\u03AD\u03BD\u03B7 \u03C3\u03B5 base64",
+    base64url: "\u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC \u03BA\u03C9\u03B4\u03B9\u03BA\u03BF\u03C0\u03BF\u03B9\u03B7\u03BC\u03AD\u03BD\u03B7 \u03C3\u03B5 base64url",
+    json_string: "\u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC JSON",
+    e164: "\u03B1\u03C1\u03B9\u03B8\u03BC\u03CC\u03C2 E.164",
+    jwt: "JWT",
+    template_literal: "\u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2"
+  };
+  const TypeDictionary = {
+    nan: "NaN"
+  };
+  return (issue2) => {
+    switch (issue2.code) {
+      case "invalid_type": {
+        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
+        const receivedType = parsedType(issue2.input);
+        const received = TypeDictionary[receivedType] ?? receivedType;
+        if (typeof issue2.expected === "string" && /^[A-Z]/.test(issue2.expected)) {
+          return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD instanceof ${issue2.expected}, \u03BB\u03AE\u03C6\u03B8\u03B7\u03BA\u03B5 ${received}`;
+        }
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD ${expected}, \u03BB\u03AE\u03C6\u03B8\u03B7\u03BA\u03B5 ${received}`;
+      }
+      case "invalid_value":
+        if (issue2.values.length === 1)
+          return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD ${stringifyPrimitive(issue2.values[0])}`;
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03B5\u03C0\u03B9\u03BB\u03BF\u03B3\u03AE: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD \u03AD\u03BD\u03B1 \u03B1\u03C0\u03CC ${joinValues(issue2.values, "|")}`;
+      case "too_big": {
+        const adj = issue2.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue2.origin);
+        if (sizing)
+          return `\u03A0\u03BF\u03BB\u03CD \u03BC\u03B5\u03B3\u03AC\u03BB\u03BF: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD ${issue2.origin ?? "\u03C4\u03B9\u03BC\u03AE"} \u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9 ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "\u03C3\u03C4\u03BF\u03B9\u03C7\u03B5\u03AF\u03B1"}`;
+        return `\u03A0\u03BF\u03BB\u03CD \u03BC\u03B5\u03B3\u03AC\u03BB\u03BF: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD ${issue2.origin ?? "\u03C4\u03B9\u03BC\u03AE"} \u03BD\u03B1 \u03B5\u03AF\u03BD\u03B1\u03B9 ${adj}${issue2.maximum.toString()}`;
+      }
+      case "too_small": {
+        const adj = issue2.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue2.origin);
+        if (sizing) {
+          return `\u03A0\u03BF\u03BB\u03CD \u03BC\u03B9\u03BA\u03C1\u03CC: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD ${issue2.origin} \u03BD\u03B1 \u03AD\u03C7\u03B5\u03B9 ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+        }
+        return `\u03A0\u03BF\u03BB\u03CD \u03BC\u03B9\u03BA\u03C1\u03CC: \u03B1\u03BD\u03B1\u03BC\u03B5\u03BD\u03CC\u03C4\u03B1\u03BD ${issue2.origin} \u03BD\u03B1 \u03B5\u03AF\u03BD\u03B1\u03B9 ${adj}${issue2.minimum.toString()}`;
+      }
+      case "invalid_format": {
+        const _issue = issue2;
+        if (_issue.format === "starts_with") {
+          return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC: \u03C0\u03C1\u03AD\u03C0\u03B5\u03B9 \u03BD\u03B1 \u03BE\u03B5\u03BA\u03B9\u03BD\u03AC \u03BC\u03B5 "${_issue.prefix}"`;
+        }
+        if (_issue.format === "ends_with")
+          return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC: \u03C0\u03C1\u03AD\u03C0\u03B5\u03B9 \u03BD\u03B1 \u03C4\u03B5\u03BB\u03B5\u03B9\u03CE\u03BD\u03B5\u03B9 \u03BC\u03B5 "${_issue.suffix}"`;
+        if (_issue.format === "includes")
+          return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC: \u03C0\u03C1\u03AD\u03C0\u03B5\u03B9 \u03BD\u03B1 \u03C0\u03B5\u03C1\u03B9\u03AD\u03C7\u03B5\u03B9 "${_issue.includes}"`;
+        if (_issue.format === "regex")
+          return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03C3\u03C5\u03BC\u03B2\u03BF\u03BB\u03BF\u03C3\u03B5\u03B9\u03C1\u03AC: \u03C0\u03C1\u03AD\u03C0\u03B5\u03B9 \u03BD\u03B1 \u03C4\u03B1\u03B9\u03C1\u03B9\u03AC\u03B6\u03B5\u03B9 \u03BC\u03B5 \u03C4\u03BF \u03BC\u03BF\u03C4\u03AF\u03B2\u03BF ${_issue.pattern}`;
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03BF: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+      }
+      case "not_multiple_of":
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03BF\u03C2 \u03B1\u03C1\u03B9\u03B8\u03BC\u03CC\u03C2: \u03C0\u03C1\u03AD\u03C0\u03B5\u03B9 \u03BD\u03B1 \u03B5\u03AF\u03BD\u03B1\u03B9 \u03C0\u03BF\u03BB\u03BB\u03B1\u03C0\u03BB\u03AC\u03C3\u03B9\u03BF \u03C4\u03BF\u03C5 ${issue2.divisor}`;
+      case "unrecognized_keys":
+        return `\u0386\u03B3\u03BD\u03C9\u03C3\u03C4${issue2.keys.length > 1 ? "\u03B1" : "\u03BF"} \u03BA\u03BB\u03B5\u03B9\u03B4${issue2.keys.length > 1 ? "\u03B9\u03AC" : "\u03AF"}: ${joinValues(issue2.keys, ", ")}`;
+      case "invalid_key":
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03BF \u03BA\u03BB\u03B5\u03B9\u03B4\u03AF \u03C3\u03C4\u03BF ${issue2.origin}`;
+      case "invalid_union":
+        return "\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2";
+      case "invalid_element":
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03C4\u03B9\u03BC\u03AE \u03C3\u03C4\u03BF ${issue2.origin}`;
+      default:
+        return `\u039C\u03B7 \u03AD\u03B3\u03BA\u03C5\u03C1\u03B7 \u03B5\u03AF\u03C3\u03BF\u03B4\u03BF\u03C2`;
+    }
+  };
+};
+function el_default() {
+  return {
     localeError: error9()
   };
 }
@@ -6250,6 +9607,10 @@ var error10 = () => {
       case "invalid_key":
         return `Invalid key in ${issue2.origin}`;
       case "invalid_union":
+        if (issue2.options && Array.isArray(issue2.options) && issue2.options.length > 0) {
+          const opts = issue2.options.map((o) => `'${o}'`).join(" | ");
+          return `Invalid discriminator value. Expected ${opts}`;
+        }
         return "Invalid input";
       case "invalid_element":
         return `Invalid value in ${issue2.origin}`;
@@ -6772,9 +10133,27 @@ var error15 = () => {
     template_literal: "entr\xE9e"
   };
   const TypeDictionary = {
-    nan: "NaN",
+    string: "cha\xEEne",
     number: "nombre",
-    array: "tableau"
+    int: "entier",
+    boolean: "bool\xE9en",
+    bigint: "grand entier",
+    symbol: "symbole",
+    undefined: "ind\xE9fini",
+    null: "null",
+    never: "jamais",
+    void: "vide",
+    date: "date",
+    array: "tableau",
+    object: "objet",
+    tuple: "tuple",
+    record: "enregistrement",
+    map: "carte",
+    set: "ensemble",
+    file: "fichier",
+    nonoptional: "non-optionnel",
+    nan: "NaN",
+    function: "fonction"
   };
   return (issue2) => {
     switch (issue2.code) {
@@ -6795,16 +10174,15 @@ var error15 = () => {
         const adj = issue2.inclusive ? "<=" : "<";
         const sizing = getSizing(issue2.origin);
         if (sizing)
-          return `Trop grand : ${issue2.origin ?? "valeur"} doit ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "\xE9l\xE9ment(s)"}`;
-        return `Trop grand : ${issue2.origin ?? "valeur"} doit \xEAtre ${adj}${issue2.maximum.toString()}`;
+          return `Trop grand : ${TypeDictionary[issue2.origin] ?? "valeur"} doit ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "\xE9l\xE9ment(s)"}`;
+        return `Trop grand : ${TypeDictionary[issue2.origin] ?? "valeur"} doit \xEAtre ${adj}${issue2.maximum.toString()}`;
       }
       case "too_small": {
         const adj = issue2.inclusive ? ">=" : ">";
         const sizing = getSizing(issue2.origin);
-        if (sizing) {
-          return `Trop petit : ${issue2.origin} doit ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
-        }
-        return `Trop petit : ${issue2.origin} doit \xEAtre ${adj}${issue2.minimum.toString()}`;
+        if (sizing)
+          return `Trop petit : ${TypeDictionary[issue2.origin] ?? "valeur"} doit ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+        return `Trop petit : ${TypeDictionary[issue2.origin] ?? "valeur"} doit \xEAtre ${adj}${issue2.minimum.toString()}`;
       }
       case "invalid_format": {
         const _issue = issue2;
@@ -7138,8 +10516,130 @@ function he_default() {
     localeError: error17()
   };
 }
-// node_modules/zod/v4/locales/hu.js
+// node_modules/zod/v4/locales/hr.js
 var error18 = () => {
+  const Sizable = {
+    string: { unit: "znakova", verb: "imati" },
+    file: { unit: "bajtova", verb: "imati" },
+    array: { unit: "stavki", verb: "imati" },
+    set: { unit: "stavki", verb: "imati" }
+  };
+  function getSizing(origin) {
+    return Sizable[origin] ?? null;
+  }
+  const FormatDictionary = {
+    regex: "unos",
+    email: "email adresa",
+    url: "URL",
+    emoji: "emoji",
+    uuid: "UUID",
+    uuidv4: "UUIDv4",
+    uuidv6: "UUIDv6",
+    nanoid: "nanoid",
+    guid: "GUID",
+    cuid: "cuid",
+    cuid2: "cuid2",
+    ulid: "ULID",
+    xid: "XID",
+    ksuid: "KSUID",
+    datetime: "ISO datum i vrijeme",
+    date: "ISO datum",
+    time: "ISO vrijeme",
+    duration: "ISO trajanje",
+    ipv4: "IPv4 adresa",
+    ipv6: "IPv6 adresa",
+    cidrv4: "IPv4 raspon",
+    cidrv6: "IPv6 raspon",
+    base64: "base64 kodirani tekst",
+    base64url: "base64url kodirani tekst",
+    json_string: "JSON tekst",
+    e164: "E.164 broj",
+    jwt: "JWT",
+    template_literal: "unos"
+  };
+  const TypeDictionary = {
+    nan: "NaN",
+    string: "tekst",
+    number: "broj",
+    boolean: "boolean",
+    array: "niz",
+    object: "objekt",
+    set: "skup",
+    file: "datoteka",
+    date: "datum",
+    bigint: "bigint",
+    symbol: "simbol",
+    undefined: "undefined",
+    null: "null",
+    function: "funkcija",
+    map: "mapa"
+  };
+  return (issue2) => {
+    switch (issue2.code) {
+      case "invalid_type": {
+        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
+        const receivedType = parsedType(issue2.input);
+        const received = TypeDictionary[receivedType] ?? receivedType;
+        if (/^[A-Z]/.test(issue2.expected)) {
+          return `Neispravan unos: o\u010Dekuje se instanceof ${issue2.expected}, a primljeno je ${received}`;
+        }
+        return `Neispravan unos: o\u010Dekuje se ${expected}, a primljeno je ${received}`;
+      }
+      case "invalid_value":
+        if (issue2.values.length === 1)
+          return `Neispravna vrijednost: o\u010Dekivano ${stringifyPrimitive(issue2.values[0])}`;
+        return `Neispravna opcija: o\u010Dekivano jedno od ${joinValues(issue2.values, "|")}`;
+      case "too_big": {
+        const adj = issue2.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue2.origin);
+        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        if (sizing)
+          return `Preveliko: o\u010Dekivano da ${origin ?? "vrijednost"} ima ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elemenata"}`;
+        return `Preveliko: o\u010Dekivano da ${origin ?? "vrijednost"} bude ${adj}${issue2.maximum.toString()}`;
+      }
+      case "too_small": {
+        const adj = issue2.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue2.origin);
+        const origin = TypeDictionary[issue2.origin] ?? issue2.origin;
+        if (sizing) {
+          return `Premalo: o\u010Dekivano da ${origin} ima ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+        }
+        return `Premalo: o\u010Dekivano da ${origin} bude ${adj}${issue2.minimum.toString()}`;
+      }
+      case "invalid_format": {
+        const _issue = issue2;
+        if (_issue.format === "starts_with")
+          return `Neispravan tekst: mora zapo\u010Dinjati s "${_issue.prefix}"`;
+        if (_issue.format === "ends_with")
+          return `Neispravan tekst: mora zavr\u0161avati s "${_issue.suffix}"`;
+        if (_issue.format === "includes")
+          return `Neispravan tekst: mora sadr\u017Eavati "${_issue.includes}"`;
+        if (_issue.format === "regex")
+          return `Neispravan tekst: mora odgovarati uzorku ${_issue.pattern}`;
+        return `Neispravna ${FormatDictionary[_issue.format] ?? issue2.format}`;
+      }
+      case "not_multiple_of":
+        return `Neispravan broj: mora biti vi\u0161ekratnik od ${issue2.divisor}`;
+      case "unrecognized_keys":
+        return `Neprepoznat${issue2.keys.length > 1 ? "i klju\u010Devi" : " klju\u010D"}: ${joinValues(issue2.keys, ", ")}`;
+      case "invalid_key":
+        return `Neispravan klju\u010D u ${TypeDictionary[issue2.origin] ?? issue2.origin}`;
+      case "invalid_union":
+        return "Neispravan unos";
+      case "invalid_element":
+        return `Neispravna vrijednost u ${TypeDictionary[issue2.origin] ?? issue2.origin}`;
+      default:
+        return `Neispravan unos`;
+    }
+  };
+};
+function hr_default() {
+  return {
+    localeError: error18()
+  };
+}
+// node_modules/zod/v4/locales/hu.js
+var error19 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "legyen" },
     file: { unit: "byte", verb: "legyen" },
@@ -7243,7 +10743,7 @@ var error18 = () => {
 };
 function hu_default() {
   return {
-    localeError: error18()
+    localeError: error19()
   };
 }
 // node_modules/zod/v4/locales/hy.js
@@ -7257,7 +10757,7 @@ function withDefiniteArticle(word) {
   const lastChar = word[word.length - 1];
   return word + (vowels.includes(lastChar) ? "\u0576" : "\u0568");
 }
-var error19 = () => {
+var error20 = () => {
   const Sizable = {
     string: {
       unit: {
@@ -7390,11 +10890,11 @@ var error19 = () => {
 };
 function hy_default() {
   return {
-    localeError: error19()
+    localeError: error20()
   };
 }
 // node_modules/zod/v4/locales/id.js
-var error20 = () => {
+var error21 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "memiliki" },
     file: { unit: "byte", verb: "memiliki" },
@@ -7496,11 +10996,11 @@ var error20 = () => {
 };
 function id_default() {
   return {
-    localeError: error20()
+    localeError: error21()
   };
 }
 // node_modules/zod/v4/locales/is.js
-var error21 = () => {
+var error22 = () => {
   const Sizable = {
     string: { unit: "stafi", verb: "a\xF0 hafa" },
     file: { unit: "b\xE6ti", verb: "a\xF0 hafa" },
@@ -7605,11 +11105,11 @@ var error21 = () => {
 };
 function is_default() {
   return {
-    localeError: error21()
+    localeError: error22()
   };
 }
 // node_modules/zod/v4/locales/it.js
-var error22 = () => {
+var error23 = () => {
   const Sizable = {
     string: { unit: "caratteri", verb: "avere" },
     file: { unit: "byte", verb: "avere" },
@@ -7694,7 +11194,7 @@ var error22 = () => {
           return `Stringa non valida: deve includere "${_issue.includes}"`;
         if (_issue.format === "regex")
           return `Stringa non valida: deve corrispondere al pattern ${_issue.pattern}`;
-        return `Invalid ${FormatDictionary[_issue.format] ?? issue2.format}`;
+        return `Input non valido: ${FormatDictionary[_issue.format] ?? issue2.format}`;
       }
       case "not_multiple_of":
         return `Numero non valido: deve essere un multiplo di ${issue2.divisor}`;
@@ -7713,11 +11213,11 @@ var error22 = () => {
 };
 function it_default() {
   return {
-    localeError: error22()
+    localeError: error23()
   };
 }
 // node_modules/zod/v4/locales/ja.js
-var error23 = () => {
+var error24 = () => {
   const Sizable = {
     string: { unit: "\u6587\u5B57", verb: "\u3067\u3042\u308B" },
     file: { unit: "\u30D0\u30A4\u30C8", verb: "\u3067\u3042\u308B" },
@@ -7820,11 +11320,11 @@ var error23 = () => {
 };
 function ja_default() {
   return {
-    localeError: error23()
+    localeError: error24()
   };
 }
 // node_modules/zod/v4/locales/ka.js
-var error24 = () => {
+var error25 = () => {
   const Sizable = {
     string: { unit: "\u10E1\u10D8\u10DB\u10D1\u10DD\u10DA\u10DD", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
     file: { unit: "\u10D1\u10D0\u10D8\u10E2\u10D8", verb: "\u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1" },
@@ -7857,9 +11357,9 @@ var error24 = () => {
     ipv6: "IPv6 \u10DB\u10D8\u10E1\u10D0\u10DB\u10D0\u10E0\u10D7\u10D8",
     cidrv4: "IPv4 \u10D3\u10D8\u10D0\u10DE\u10D0\u10D6\u10DD\u10DC\u10D8",
     cidrv6: "IPv6 \u10D3\u10D8\u10D0\u10DE\u10D0\u10D6\u10DD\u10DC\u10D8",
-    base64: "base64-\u10D9\u10DD\u10D3\u10D8\u10E0\u10D4\u10D1\u10E3\u10DA\u10D8 \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8",
-    base64url: "base64url-\u10D9\u10DD\u10D3\u10D8\u10E0\u10D4\u10D1\u10E3\u10DA\u10D8 \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8",
-    json_string: "JSON \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8",
+    base64: "base64-\u10D9\u10DD\u10D3\u10D8\u10E0\u10D4\u10D1\u10E3\u10DA\u10D8 \u10D5\u10D4\u10DA\u10D8",
+    base64url: "base64url-\u10D9\u10DD\u10D3\u10D8\u10E0\u10D4\u10D1\u10E3\u10DA\u10D8 \u10D5\u10D4\u10DA\u10D8",
+    json_string: "JSON \u10D5\u10D4\u10DA\u10D8",
     e164: "E.164 \u10DC\u10DD\u10DB\u10D4\u10E0\u10D8",
     jwt: "JWT",
     template_literal: "\u10E8\u10D4\u10E7\u10D5\u10D0\u10DC\u10D0"
@@ -7867,7 +11367,7 @@ var error24 = () => {
   const TypeDictionary = {
     nan: "NaN",
     number: "\u10E0\u10D8\u10EA\u10EE\u10D5\u10D8",
-    string: "\u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8",
+    string: "\u10D5\u10D4\u10DA\u10D8",
     boolean: "\u10D1\u10E3\u10DA\u10D4\u10D0\u10DC\u10D8",
     function: "\u10E4\u10E3\u10DC\u10E5\u10EA\u10D8\u10D0",
     array: "\u10DB\u10D0\u10E1\u10D8\u10D5\u10D8"
@@ -7905,14 +11405,14 @@ var error24 = () => {
       case "invalid_format": {
         const _issue = issue2;
         if (_issue.format === "starts_with") {
-          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10D8\u10EC\u10E7\u10D4\u10D1\u10DD\u10D3\u10D4\u10E1 "${_issue.prefix}"-\u10D8\u10D7`;
+          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10D5\u10D4\u10DA\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10D8\u10EC\u10E7\u10D4\u10D1\u10DD\u10D3\u10D4\u10E1 "${_issue.prefix}"-\u10D8\u10D7`;
         }
         if (_issue.format === "ends_with")
-          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10DB\u10D7\u10D0\u10D5\u10E0\u10D3\u10D4\u10D1\u10DD\u10D3\u10D4\u10E1 "${_issue.suffix}"-\u10D8\u10D7`;
+          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10D5\u10D4\u10DA\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10DB\u10D7\u10D0\u10D5\u10E0\u10D3\u10D4\u10D1\u10DD\u10D3\u10D4\u10E1 "${_issue.suffix}"-\u10D8\u10D7`;
         if (_issue.format === "includes")
-          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1 "${_issue.includes}"-\u10E1`;
+          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10D5\u10D4\u10DA\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D8\u10EA\u10D0\u10D5\u10D3\u10D4\u10E1 "${_issue.includes}"-\u10E1`;
         if (_issue.format === "regex")
-          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10E1\u10E2\u10E0\u10D8\u10DC\u10D2\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D4\u10E1\u10D0\u10D1\u10D0\u10DB\u10D4\u10D1\u10DD\u10D3\u10D4\u10E1 \u10E8\u10D0\u10D1\u10DA\u10DD\u10DC\u10E1 ${_issue.pattern}`;
+          return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 \u10D5\u10D4\u10DA\u10D8: \u10E3\u10DC\u10D3\u10D0 \u10E8\u10D4\u10D4\u10E1\u10D0\u10D1\u10D0\u10DB\u10D4\u10D1\u10DD\u10D3\u10D4\u10E1 \u10E8\u10D0\u10D1\u10DA\u10DD\u10DC\u10E1 ${_issue.pattern}`;
         return `\u10D0\u10E0\u10D0\u10E1\u10EC\u10DD\u10E0\u10D8 ${FormatDictionary[_issue.format] ?? issue2.format}`;
       }
       case "not_multiple_of":
@@ -7932,11 +11432,11 @@ var error24 = () => {
 };
 function ka_default() {
   return {
-    localeError: error24()
+    localeError: error25()
   };
 }
 // node_modules/zod/v4/locales/km.js
-var error25 = () => {
+var error26 = () => {
   const Sizable = {
     string: { unit: "\u178F\u17BD\u17A2\u1780\u17D2\u179F\u179A", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
     file: { unit: "\u1794\u17C3", verb: "\u1782\u17BD\u179A\u1798\u17B6\u1793" },
@@ -8042,7 +11542,7 @@ var error25 = () => {
 };
 function km_default() {
   return {
-    localeError: error25()
+    localeError: error26()
   };
 }
 
@@ -8051,7 +11551,7 @@ function kh_default() {
   return km_default();
 }
 // node_modules/zod/v4/locales/ko.js
-var error26 = () => {
+var error27 = () => {
   const Sizable = {
     string: { unit: "\uBB38\uC790", verb: "to have" },
     file: { unit: "\uBC14\uC774\uD2B8", verb: "to have" },
@@ -8158,7 +11658,7 @@ var error26 = () => {
 };
 function ko_default() {
   return {
-    localeError: error26()
+    localeError: error27()
   };
 }
 // node_modules/zod/v4/locales/lt.js
@@ -8175,7 +11675,7 @@ function getUnitTypeFromNumber(number2) {
     return "one";
   return "few";
 }
-var error27 = () => {
+var error28 = () => {
   const Sizable = {
     string: {
       unit: {
@@ -8361,11 +11861,11 @@ var error27 = () => {
 };
 function lt_default() {
   return {
-    localeError: error27()
+    localeError: error28()
   };
 }
 // node_modules/zod/v4/locales/mk.js
-var error28 = () => {
+var error29 = () => {
   const Sizable = {
     string: { unit: "\u0437\u043D\u0430\u0446\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
     file: { unit: "\u0431\u0430\u0458\u0442\u0438", verb: "\u0434\u0430 \u0438\u043C\u0430\u0430\u0442" },
@@ -8470,11 +11970,11 @@ var error28 = () => {
 };
 function mk_default() {
   return {
-    localeError: error28()
+    localeError: error29()
   };
 }
 // node_modules/zod/v4/locales/ms.js
-var error29 = () => {
+var error30 = () => {
   const Sizable = {
     string: { unit: "aksara", verb: "mempunyai" },
     file: { unit: "bait", verb: "mempunyai" },
@@ -8577,11 +12077,11 @@ var error29 = () => {
 };
 function ms_default() {
   return {
-    localeError: error29()
+    localeError: error30()
   };
 }
 // node_modules/zod/v4/locales/nl.js
-var error30 = () => {
+var error31 = () => {
   const Sizable = {
     string: { unit: "tekens", verb: "heeft" },
     file: { unit: "bytes", verb: "heeft" },
@@ -8687,11 +12187,11 @@ var error30 = () => {
 };
 function nl_default() {
   return {
-    localeError: error30()
+    localeError: error31()
   };
 }
 // node_modules/zod/v4/locales/no.js
-var error31 = () => {
+var error32 = () => {
   const Sizable = {
     string: { unit: "tegn", verb: "\xE5 ha" },
     file: { unit: "bytes", verb: "\xE5 ha" },
@@ -8795,11 +12295,11 @@ var error31 = () => {
 };
 function no_default() {
   return {
-    localeError: error31()
+    localeError: error32()
   };
 }
 // node_modules/zod/v4/locales/ota.js
-var error32 = () => {
+var error33 = () => {
   const Sizable = {
     string: { unit: "harf", verb: "olmal\u0131d\u0131r" },
     file: { unit: "bayt", verb: "olmal\u0131d\u0131r" },
@@ -8904,11 +12404,11 @@ var error32 = () => {
 };
 function ota_default() {
   return {
-    localeError: error32()
+    localeError: error33()
   };
 }
 // node_modules/zod/v4/locales/ps.js
-var error33 = () => {
+var error34 = () => {
   const Sizable = {
     string: { unit: "\u062A\u0648\u06A9\u064A", verb: "\u0648\u0644\u0631\u064A" },
     file: { unit: "\u0628\u0627\u06CC\u067C\u0633", verb: "\u0648\u0644\u0631\u064A" },
@@ -9018,11 +12518,11 @@ var error33 = () => {
 };
 function ps_default() {
   return {
-    localeError: error33()
+    localeError: error34()
   };
 }
 // node_modules/zod/v4/locales/pl.js
-var error34 = () => {
+var error35 = () => {
   const Sizable = {
     string: { unit: "znak\xF3w", verb: "mie\u0107" },
     file: { unit: "bajt\xF3w", verb: "mie\u0107" },
@@ -9127,11 +12627,11 @@ var error34 = () => {
 };
 function pl_default() {
   return {
-    localeError: error34()
+    localeError: error35()
   };
 }
 // node_modules/zod/v4/locales/pt.js
-var error35 = () => {
+var error36 = () => {
   const Sizable = {
     string: { unit: "caracteres", verb: "ter" },
     file: { unit: "bytes", verb: "ter" },
@@ -9235,7 +12735,126 @@ var error35 = () => {
 };
 function pt_default() {
   return {
-    localeError: error35()
+    localeError: error36()
+  };
+}
+// node_modules/zod/v4/locales/ro.js
+var error37 = () => {
+  const Sizable = {
+    string: { unit: "caractere", verb: "s\u0103 aib\u0103" },
+    file: { unit: "octe\u021Bi", verb: "s\u0103 aib\u0103" },
+    array: { unit: "elemente", verb: "s\u0103 aib\u0103" },
+    set: { unit: "elemente", verb: "s\u0103 aib\u0103" },
+    map: { unit: "intr\u0103ri", verb: "s\u0103 aib\u0103" }
+  };
+  function getSizing(origin) {
+    return Sizable[origin] ?? null;
+  }
+  const FormatDictionary = {
+    regex: "intrare",
+    email: "adres\u0103 de email",
+    url: "URL",
+    emoji: "emoji",
+    uuid: "UUID",
+    uuidv4: "UUIDv4",
+    uuidv6: "UUIDv6",
+    nanoid: "nanoid",
+    guid: "GUID",
+    cuid: "cuid",
+    cuid2: "cuid2",
+    ulid: "ULID",
+    xid: "XID",
+    ksuid: "KSUID",
+    datetime: "dat\u0103 \u0219i or\u0103 ISO",
+    date: "dat\u0103 ISO",
+    time: "or\u0103 ISO",
+    duration: "durat\u0103 ISO",
+    ipv4: "adres\u0103 IPv4",
+    ipv6: "adres\u0103 IPv6",
+    mac: "adres\u0103 MAC",
+    cidrv4: "interval IPv4",
+    cidrv6: "interval IPv6",
+    base64: "\u0219ir codat base64",
+    base64url: "\u0219ir codat base64url",
+    json_string: "\u0219ir JSON",
+    e164: "num\u0103r E.164",
+    jwt: "JWT",
+    template_literal: "intrare"
+  };
+  const TypeDictionary = {
+    nan: "NaN",
+    string: "\u0219ir",
+    number: "num\u0103r",
+    boolean: "boolean",
+    function: "func\u021Bie",
+    array: "matrice",
+    object: "obiect",
+    undefined: "nedefinit",
+    symbol: "simbol",
+    bigint: "num\u0103r mare",
+    void: "void",
+    never: "never",
+    map: "hart\u0103",
+    set: "set"
+  };
+  return (issue2) => {
+    switch (issue2.code) {
+      case "invalid_type": {
+        const expected = TypeDictionary[issue2.expected] ?? issue2.expected;
+        const receivedType = parsedType(issue2.input);
+        const received = TypeDictionary[receivedType] ?? receivedType;
+        return `Intrare invalid\u0103: a\u0219teptat ${expected}, primit ${received}`;
+      }
+      case "invalid_value":
+        if (issue2.values.length === 1)
+          return `Intrare invalid\u0103: a\u0219teptat ${stringifyPrimitive(issue2.values[0])}`;
+        return `Op\u021Biune invalid\u0103: a\u0219teptat una dintre ${joinValues(issue2.values, "|")}`;
+      case "too_big": {
+        const adj = issue2.inclusive ? "<=" : "<";
+        const sizing = getSizing(issue2.origin);
+        if (sizing)
+          return `Prea mare: a\u0219teptat ca ${issue2.origin ?? "valoarea"} ${sizing.verb} ${adj}${issue2.maximum.toString()} ${sizing.unit ?? "elemente"}`;
+        return `Prea mare: a\u0219teptat ca ${issue2.origin ?? "valoarea"} s\u0103 fie ${adj}${issue2.maximum.toString()}`;
+      }
+      case "too_small": {
+        const adj = issue2.inclusive ? ">=" : ">";
+        const sizing = getSizing(issue2.origin);
+        if (sizing) {
+          return `Prea mic: a\u0219teptat ca ${issue2.origin} ${sizing.verb} ${adj}${issue2.minimum.toString()} ${sizing.unit}`;
+        }
+        return `Prea mic: a\u0219teptat ca ${issue2.origin} s\u0103 fie ${adj}${issue2.minimum.toString()}`;
+      }
+      case "invalid_format": {
+        const _issue = issue2;
+        if (_issue.format === "starts_with") {
+          return `\u0218ir invalid: trebuie s\u0103 \xEEnceap\u0103 cu "${_issue.prefix}"`;
+        }
+        if (_issue.format === "ends_with")
+          return `\u0218ir invalid: trebuie s\u0103 se termine cu "${_issue.suffix}"`;
+        if (_issue.format === "includes")
+          return `\u0218ir invalid: trebuie s\u0103 includ\u0103 "${_issue.includes}"`;
+        if (_issue.format === "regex")
+          return `\u0218ir invalid: trebuie s\u0103 se potriveasc\u0103 cu modelul ${_issue.pattern}`;
+        return `Format invalid: ${FormatDictionary[_issue.format] ?? issue2.format}`;
+      }
+      case "not_multiple_of":
+        return `Num\u0103r invalid: trebuie s\u0103 fie multiplu de ${issue2.divisor}`;
+      case "unrecognized_keys":
+        return `Chei nerecunoscute: ${joinValues(issue2.keys, ", ")}`;
+      case "invalid_key":
+        return `Cheie invalid\u0103 \xEEn ${issue2.origin}`;
+      case "invalid_union":
+        return "Intrare invalid\u0103";
+      case "invalid_element":
+        return `Valoare invalid\u0103 \xEEn ${issue2.origin}`;
+      default:
+        return `Intrare invalid\u0103`;
+    }
+  };
+};
+function ro_default() {
+  return {
+    localeError: error37()
   };
 }
 // node_modules/zod/v4/locales/ru.js
@@ -9254,7 +12873,7 @@ function getRussianPlural(count, one, few, many) {
   }
   return many;
 }
-var error36 = () => {
+var error38 = () => {
   const Sizable = {
     string: {
       unit: {
@@ -9391,11 +13010,11 @@ var error36 = () => {
 };
 function ru_default() {
   return {
-    localeError: error36()
+    localeError: error38()
   };
 }
 // node_modules/zod/v4/locales/sl.js
-var error37 = () => {
+var error39 = () => {
   const Sizable = {
     string: { unit: "znakov", verb: "imeti" },
     file: { unit: "bajtov", verb: "imeti" },
@@ -9500,11 +13119,11 @@ var error37 = () => {
 };
 function sl_default() {
   return {
-    localeError: error37()
+    localeError: error39()
   };
 }
 // node_modules/zod/v4/locales/sv.js
-var error38 = () => {
+var error40 = () => {
   const Sizable = {
     string: { unit: "tecken", verb: "att ha" },
     file: { unit: "bytes", verb: "att ha" },
@@ -9610,11 +13229,11 @@ var error38 = () => {
 };
 function sv_default() {
   return {
-    localeError: error38()
+    localeError: error40()
   };
 }
 // node_modules/zod/v4/locales/ta.js
-var error39 = () => {
+var error41 = () => {
   const Sizable = {
     string: { unit: "\u0B8E\u0BB4\u0BC1\u0BA4\u0BCD\u0BA4\u0BC1\u0B95\u0BCD\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
     file: { unit: "\u0BAA\u0BC8\u0B9F\u0BCD\u0B9F\u0BC1\u0B95\u0BB3\u0BCD", verb: "\u0B95\u0BCA\u0BA3\u0BCD\u0B9F\u0BBF\u0BB0\u0BC1\u0B95\u0BCD\u0B95 \u0BB5\u0BC7\u0BA3\u0BCD\u0B9F\u0BC1\u0BAE\u0BCD" },
@@ -9720,11 +13339,11 @@ var error39 = () => {
 };
 function ta_default() {
   return {
-    localeError: error39()
+    localeError: error41()
   };
 }
 // node_modules/zod/v4/locales/th.js
-var error40 = () => {
+var error42 = () => {
   const Sizable = {
     string: { unit: "\u0E15\u0E31\u0E27\u0E2D\u0E31\u0E01\u0E29\u0E23", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
     file: { unit: "\u0E44\u0E1A\u0E15\u0E4C", verb: "\u0E04\u0E27\u0E23\u0E21\u0E35" },
@@ -9830,11 +13449,11 @@ var error40 = () => {
 };
 function th_default() {
   return {
-    localeError: error40()
+    localeError: error42()
   };
 }
 // node_modules/zod/v4/locales/tr.js
-var error41 = () => {
+var error43 = () => {
   const Sizable = {
     string: { unit: "karakter", verb: "olmal\u0131" },
     file: { unit: "bayt", verb: "olmal\u0131" },
@@ -9935,11 +13554,11 @@ var error41 = () => {
 };
 function tr_default() {
   return {
-    localeError: error41()
+    localeError: error43()
   };
 }
 // node_modules/zod/v4/locales/uk.js
-var error42 = () => {
+var error44 = () => {
   const Sizable = {
     string: { unit: "\u0441\u0438\u043C\u0432\u043E\u043B\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
     file: { unit: "\u0431\u0430\u0439\u0442\u0456\u0432", verb: "\u043C\u0430\u0442\u0438\u043C\u0435" },
@@ -10043,7 +13662,7 @@ var error42 = () => {
 };
 function uk_default() {
   return {
-    localeError: error42()
+    localeError: error44()
   };
 }
 
@@ -10052,7 +13671,7 @@ function ua_default() {
   return uk_default();
 }
 // node_modules/zod/v4/locales/ur.js
-var error43 = () => {
+var error45 = () => {
   const Sizable = {
     string: { unit: "\u062D\u0631\u0648\u0641", verb: "\u06C1\u0648\u0646\u0627" },
     file: { unit: "\u0628\u0627\u0626\u0679\u0633", verb: "\u06C1\u0648\u0646\u0627" },
@@ -10158,16 +13777,17 @@ var error43 = () => {
 };
 function ur_default() {
   return {
-    localeError: error43()
+    localeError: error45()
   };
 }
 // node_modules/zod/v4/locales/uz.js
-var error44 = () => {
+var error46 = () => {
   const Sizable = {
     string: { unit: "belgi", verb: "bo\u2018lishi kerak" },
     file: { unit: "bayt", verb: "bo\u2018lishi kerak" },
     array: { unit: "element", verb: "bo\u2018lishi kerak" },
-    set: { unit: "element", verb: "bo\u2018lishi kerak" }
+    set: { unit: "element", verb: "bo\u2018lishi kerak" },
+    map: { unit: "yozuv", verb: "bo\u2018lishi kerak" }
   };
   function getSizing(origin) {
     return Sizable[origin] ?? null;
@@ -10267,11 +13887,11 @@ var error44 = () => {
 };
 function uz_default() {
   return {
-    localeError: error44()
+    localeError: error46()
   };
 }
 // node_modules/zod/v4/locales/vi.js
-var error45 = () => {
+var error47 = () => {
   const Sizable = {
     string: { unit: "k\xFD t\u1EF1", verb: "c\xF3" },
     file: { unit: "byte", verb: "c\xF3" },
@@ -10375,11 +13995,11 @@ var error45 = () => {
 };
 function vi_default() {
   return {
-    localeError: error45()
+    localeError: error47()
   };
 }
 // node_modules/zod/v4/locales/zh-CN.js
-var error46 = () => {
+var error48 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u7B26", verb: "\u5305\u542B" },
     file: { unit: "\u5B57\u8282", verb: "\u5305\u542B" },
@@ -10484,11 +14104,11 @@ var error46 = () => {
 };
 function zh_CN_default() {
   return {
-    localeError: error46()
+    localeError: error48()
   };
 }
 // node_modules/zod/v4/locales/zh-TW.js
-var error47 = () => {
+var error49 = () => {
   const Sizable = {
     string: { unit: "\u5B57\u5143", verb: "\u64C1\u6709" },
     file: { unit: "\u4F4D\u5143\u7D44", verb: "\u64C1\u6709" },
@@ -10591,11 +14211,11 @@ var error47 = () => {
 };
 function zh_TW_default() {
   return {
-    localeError: error47()
+    localeError: error49()
   };
 }
 // node_modules/zod/v4/locales/yo.js
-var error48 = () => {
+var error50 = () => {
   const Sizable = {
     string: { unit: "\xE0mi", verb: "n\xED" },
     file: { unit: "bytes", verb: "n\xED" },
@@ -10698,11 +14318,11 @@ var error48 = () => {
 };
 function yo_default() {
   return {
-    localeError: error48()
+    localeError: error50()
   };
 }
 // node_modules/zod/v4/core/registries.js
-var _a;
+var _a2;
 var $output = Symbol("ZodOutput");
 var $input = Symbol("ZodInput");
 
@@ -10749,7 +14369,7 @@ class $ZodRegistry {
 function registry() {
   return new $ZodRegistry;
 }
-(_a = globalThis).__zod_globalRegistry ?? (_a.__zod_globalRegistry = registry());
+(_a2 = globalThis).__zod_globalRegistry ?? (_a2.__zod_globalRegistry = registry());
 var globalRegistry = globalThis.__zod_globalRegistry;
 // node_modules/zod/v4/core/api.js
 function _string(Class2, params) {
@@ -11555,7 +15175,7 @@ function _refine(Class2, fn, _params) {
   });
   return schema;
 }
-function _superRefine(fn) {
+function _superRefine(fn, params) {
   const ch = _check((payload) => {
     payload.addIssue = (issue2) => {
       if (typeof issue2 === "string") {
@@ -11572,7 +15192,7 @@ function _superRefine(fn) {
       }
     };
     return fn(payload.value, payload);
-  });
+  }, params);
   return ch;
 }
 function _check(fn, params) {
@@ -11693,7 +15313,7 @@ function initializeContext(params) {
   };
 }
 function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
-  var _a2;
+  var _a3;
   const def = schema._zod.def;
   const seen = ctx.seen.get(schema);
   if (seen) {
@@ -11740,8 +15360,8 @@ function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
     delete result.schema.examples;
     delete result.schema.default;
   }
-  if (ctx.io === "input" && result.schema._prefault)
-    (_a2 = result.schema).default ?? (_a2.default = result.schema._prefault);
+  if (ctx.io === "input" && "_prefault" in result.schema)
+    (_a3 = result.schema).default ?? (_a3.default = result.schema._prefault);
   delete result.schema._prefault;
   const _result = ctx.seen.get(schema);
   return _result.schema;
@@ -11918,10 +15538,15 @@ function finalize(ctx, schema) {
     result.$id = ctx.external.uri(id);
   }
   Object.assign(result, root.def ?? root.schema);
+  const rootMetaId = ctx.metadataRegistry.get(schema)?.id;
+  if (rootMetaId !== undefined && result.id === rootMetaId)
+    delete result.id;
   const defs = ctx.external?.defs ?? {};
   for (const entry of ctx.seen.entries()) {
     const seen = entry[1];
     if (seen.def && seen.defId) {
+      if (seen.def.id === seen.defId)
+        delete seen.def.id;
       defs[seen.defId] = seen.def;
     }
   }
@@ -11976,6 +15601,8 @@ function isTransforming(_schema, _ctx) {
     return isTransforming(def.keyType, ctx) || isTransforming(def.valueType, ctx);
   }
   if (def.type === "pipe") {
+    if (_schema._zod.traits.has("$ZodCodec"))
+      return true;
     return isTransforming(def.in, ctx) || isTransforming(def.out, ctx);
   }
   if (def.type === "object") {
@@ -12063,39 +15690,28 @@ var numberProcessor = (schema, ctx, _json, _params) => {
     json.type = "integer";
   else
     json.type = "number";
-  if (typeof exclusiveMinimum === "number") {
-    if (ctx.target === "draft-04" || ctx.target === "openapi-3.0") {
+  const exMin = typeof exclusiveMinimum === "number" && exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY);
+  const exMax = typeof exclusiveMaximum === "number" && exclusiveMaximum <= (maximum ?? Number.POSITIVE_INFINITY);
+  const legacy = ctx.target === "draft-04" || ctx.target === "openapi-3.0";
+  if (exMin) {
+    if (legacy) {
       json.minimum = exclusiveMinimum;
       json.exclusiveMinimum = true;
     } else {
       json.exclusiveMinimum = exclusiveMinimum;
     }
-  }
-  if (typeof minimum === "number") {
+  } else if (typeof minimum === "number") {
     json.minimum = minimum;
-    if (typeof exclusiveMinimum === "number" && ctx.target !== "draft-04") {
-      if (exclusiveMinimum >= minimum)
-        delete json.minimum;
-      else
-        delete json.exclusiveMinimum;
-    }
   }
-  if (typeof exclusiveMaximum === "number") {
-    if (ctx.target === "draft-04" || ctx.target === "openapi-3.0") {
+  if (exMax) {
+    if (legacy) {
       json.maximum = exclusiveMaximum;
       json.exclusiveMaximum = true;
     } else {
       json.exclusiveMaximum = exclusiveMaximum;
     }
-  }
-  if (typeof maximum === "number") {
+  } else if (typeof maximum === "number") {
     json.maximum = maximum;
-    if (typeof exclusiveMaximum === "number" && ctx.target !== "draft-04") {
-      if (exclusiveMaximum <= maximum)
-        delete json.maximum;
-      else
-        delete json.exclusiveMaximum;
-    }
   }
   if (typeof multipleOf === "number")
     json.multipleOf = multipleOf;
@@ -12263,7 +15879,10 @@ var arrayProcessor = (schema, ctx, _json, params) => {
   if (typeof maximum === "number")
     json.maxItems = maximum;
   json.type = "array";
-  json.items = process2(def.element, ctx, { ...params, path: [...params.path, "items"] });
+  json.items = process2(def.element, ctx, {
+    ...params,
+    path: [...params.path, "items"]
+  });
 };
 var objectProcessor = (schema, ctx, _json, params) => {
   const json = _json;
@@ -12456,7 +16075,8 @@ var catchProcessor = (schema, ctx, json, params) => {
 };
 var pipeProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def;
-  const innerType = ctx.io === "input" ? def.in._zod.def.type === "transform" ? def.out : def.in : def.out;
+  const inIsTransform = def.in._zod.traits.has("$ZodTransform");
+  const innerType = ctx.io === "input" ? inIsTransform ? def.out : def.in : def.out;
   process2(innerType, ctx, params);
   const seen = ctx.seen.get(schema);
   seen.ref = innerType;
@@ -12682,6 +16302,7 @@ __export(exports_schemas2, {
   json: () => json,
   ipv6: () => ipv62,
   ipv4: () => ipv42,
+  invertCodec: () => invertCodec,
   intersection: () => intersection,
   int64: () => int64,
   int32: () => int32,
@@ -12742,6 +16363,7 @@ __export(exports_schemas2, {
   ZodRecord: () => ZodRecord,
   ZodReadonly: () => ZodReadonly,
   ZodPromise: () => ZodPromise,
+  ZodPreprocess: () => ZodPreprocess,
   ZodPrefault: () => ZodPrefault,
   ZodPipe: () => ZodPipe,
   ZodOptional: () => ZodOptional,
@@ -12896,8 +16518,8 @@ var initializer2 = (inst, issues) => {
     }
   });
 };
-var ZodError = $constructor("ZodError", initializer2);
-var ZodRealError = $constructor("ZodError", initializer2, {
+var ZodError = /* @__PURE__ */ $constructor("ZodError", initializer2);
+var ZodRealError = /* @__PURE__ */ $constructor("ZodError", initializer2, {
   Parent: Error
 });
 
@@ -12916,6 +16538,43 @@ var safeEncodeAsync2 = /* @__PURE__ */ _safeEncodeAsync(ZodRealError);
 var safeDecodeAsync2 = /* @__PURE__ */ _safeDecodeAsync(ZodRealError);
 
 // node_modules/zod/v4/classic/schemas.js
+var _installedGroups = /* @__PURE__ */ new WeakMap;
+function _installLazyMethods(inst, group, methods) {
+  const proto = Object.getPrototypeOf(inst);
+  let installed = _installedGroups.get(proto);
+  if (!installed) {
+    installed = new Set;
+    _installedGroups.set(proto, installed);
+  }
+  if (installed.has(group))
+    return;
+  installed.add(group);
+  for (const key in methods) {
+    const fn = methods[key];
+    Object.defineProperty(proto, key, {
+      configurable: true,
+      enumerable: false,
+      get() {
+        const bound = fn.bind(this);
+        Object.defineProperty(this, key, {
+          configurable: true,
+          writable: true,
+          enumerable: true,
+          value: bound
+        });
+        return bound;
+      },
+      set(v) {
+        Object.defineProperty(this, key, {
+          configurable: true,
+          writable: true,
+          enumerable: true,
+          value: v
+        });
+      }
+    });
+  }
+}
 var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   $ZodType.init(inst, def);
   Object.assign(inst["~standard"], {
@@ -12928,23 +16587,6 @@ var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   inst.def = def;
   inst.type = def.type;
   Object.defineProperty(inst, "_def", { value: def });
-  inst.check = (...checks2) => {
-    return inst.clone(exports_util.mergeDefs(def, {
-      checks: [
-        ...def.checks ?? [],
-        ...checks2.map((ch) => typeof ch === "function" ? { _zod: { check: ch, def: { check: "custom" }, onattach: [] } } : ch)
-      ]
-    }), {
-      parent: true
-    });
-  };
-  inst.with = inst.check;
-  inst.clone = (def2, params) => clone(inst, def2, params);
-  inst.brand = () => inst;
-  inst.register = (reg, meta2) => {
-    reg.add(inst, meta2);
-    return inst;
-  };
   inst.parse = (data, params) => parse3(inst, data, params, { callee: inst.parse });
   inst.safeParse = (data, params) => safeParse2(inst, data, params);
   inst.parseAsync = async (data, params) => parseAsync2(inst, data, params, { callee: inst.parseAsync });
@@ -12958,45 +16600,108 @@ var ZodType = /* @__PURE__ */ $constructor("ZodType", (inst, def) => {
   inst.safeDecode = (data, params) => safeDecode2(inst, data, params);
   inst.safeEncodeAsync = async (data, params) => safeEncodeAsync2(inst, data, params);
   inst.safeDecodeAsync = async (data, params) => safeDecodeAsync2(inst, data, params);
-  inst.refine = (check, params) => inst.check(refine(check, params));
-  inst.superRefine = (refinement) => inst.check(superRefine(refinement));
-  inst.overwrite = (fn) => inst.check(_overwrite(fn));
-  inst.optional = () => optional(inst);
-  inst.exactOptional = () => exactOptional(inst);
-  inst.nullable = () => nullable(inst);
-  inst.nullish = () => optional(nullable(inst));
-  inst.nonoptional = (params) => nonoptional(inst, params);
-  inst.array = () => array(inst);
-  inst.or = (arg) => union([inst, arg]);
-  inst.and = (arg) => intersection(inst, arg);
-  inst.transform = (tx) => pipe(inst, transform(tx));
-  inst.default = (def2) => _default2(inst, def2);
-  inst.prefault = (def2) => prefault(inst, def2);
-  inst.catch = (params) => _catch2(inst, params);
-  inst.pipe = (target) => pipe(inst, target);
-  inst.readonly = () => readonly(inst);
-  inst.describe = (description) => {
-    const cl = inst.clone();
-    globalRegistry.add(cl, { description });
-    return cl;
-  };
+  _installLazyMethods(inst, "ZodType", {
+    check(...chks) {
+      const def2 = this.def;
+      return this.clone(exports_util.mergeDefs(def2, {
+        checks: [
+          ...def2.checks ?? [],
+          ...chks.map((ch) => typeof ch === "function" ? { _zod: { check: ch, def: { check: "custom" }, onattach: [] } } : ch)
+        ]
+      }), { parent: true });
+    },
+    with(...chks) {
+      return this.check(...chks);
+    },
+    clone(def2, params) {
+      return clone(this, def2, params);
+    },
+    brand() {
+      return this;
+    },
+    register(reg, meta2) {
+      reg.add(this, meta2);
+      return this;
+    },
+    refine(check, params) {
+      return this.check(refine(check, params));
+    },
+    superRefine(refinement, params) {
+      return this.check(superRefine(refinement, params));
+    },
+    overwrite(fn) {
+      return this.check(_overwrite(fn));
+    },
+    optional() {
+      return optional(this);
+    },
+    exactOptional() {
+      return exactOptional(this);
+    },
+    nullable() {
+      return nullable(this);
+    },
+    nullish() {
+      return optional(nullable(this));
+    },
+    nonoptional(params) {
+      return nonoptional(this, params);
+    },
+    array() {
+      return array(this);
+    },
+    or(arg) {
+      return union([this, arg]);
+    },
+    and(arg) {
+      return intersection(this, arg);
+    },
+    transform(tx) {
+      return pipe(this, transform(tx));
+    },
+    default(d) {
+      return _default2(this, d);
+    },
+    prefault(d) {
+      return prefault(this, d);
+    },
+    catch(params) {
+      return _catch2(this, params);
+    },
+    pipe(target) {
+      return pipe(this, target);
+    },
+    readonly() {
+      return readonly(this);
+    },
+    describe(description) {
+      const cl = this.clone();
+      globalRegistry.add(cl, { description });
+      return cl;
+    },
+    meta(...args) {
+      if (args.length === 0)
+        return globalRegistry.get(this);
+      const cl = this.clone();
+      globalRegistry.add(cl, args[0]);
+      return cl;
+    },
+    isOptional() {
+      return this.safeParse(undefined).success;
+    },
+    isNullable() {
+      return this.safeParse(null).success;
+    },
+    apply(fn) {
+      return fn(this);
+    }
+  });
   Object.defineProperty(inst, "description", {
     get() {
       return globalRegistry.get(inst)?.description;
     },
     configurable: true
   });
-  inst.meta = (...args) => {
-    if (args.length === 0) {
-      return globalRegistry.get(inst);
-    }
-    const cl = inst.clone();
-    globalRegistry.add(cl, args[0]);
-    return cl;
-  };
-  inst.isOptional = () => inst.safeParse(undefined).success;
-  inst.isNullable = () => inst.safeParse(null).success;
-  inst.apply = (fn) => fn(inst);
   return inst;
 });
 var _ZodString = /* @__PURE__ */ $constructor("_ZodString", (inst, def) => {
@@ -13007,21 +16712,53 @@ var _ZodString = /* @__PURE__ */ $constructor("_ZodString", (inst, def) => {
   inst.format = bag.format ?? null;
   inst.minLength = bag.minimum ?? null;
   inst.maxLength = bag.maximum ?? null;
-  inst.regex = (...args) => inst.check(_regex(...args));
-  inst.includes = (...args) => inst.check(_includes(...args));
-  inst.startsWith = (...args) => inst.check(_startsWith(...args));
-  inst.endsWith = (...args) => inst.check(_endsWith(...args));
-  inst.min = (...args) => inst.check(_minLength(...args));
-  inst.max = (...args) => inst.check(_maxLength(...args));
-  inst.length = (...args) => inst.check(_length(...args));
-  inst.nonempty = (...args) => inst.check(_minLength(1, ...args));
-  inst.lowercase = (params) => inst.check(_lowercase(params));
-  inst.uppercase = (params) => inst.check(_uppercase(params));
-  inst.trim = () => inst.check(_trim());
-  inst.normalize = (...args) => inst.check(_normalize(...args));
-  inst.toLowerCase = () => inst.check(_toLowerCase());
-  inst.toUpperCase = () => inst.check(_toUpperCase());
-  inst.slugify = () => inst.check(_slugify());
+  _installLazyMethods(inst, "_ZodString", {
+    regex(...args) {
+      return this.check(_regex(...args));
+    },
+    includes(...args) {
+      return this.check(_includes(...args));
+    },
+    startsWith(...args) {
+      return this.check(_startsWith(...args));
+    },
+    endsWith(...args) {
+      return this.check(_endsWith(...args));
+    },
+    min(...args) {
+      return this.check(_minLength(...args));
+    },
+    max(...args) {
+      return this.check(_maxLength(...args));
+    },
+    length(...args) {
+      return this.check(_length(...args));
+    },
+    nonempty(...args) {
+      return this.check(_minLength(1, ...args));
+    },
+    lowercase(params) {
+      return this.check(_lowercase(params));
+    },
+    uppercase(params) {
+      return this.check(_uppercase(params));
+    },
+    trim() {
+      return this.check(_trim());
+    },
+    normalize(...args) {
+      return this.check(_normalize(...args));
+    },
+    toLowerCase() {
+      return this.check(_toLowerCase());
+    },
+    toUpperCase() {
+      return this.check(_toUpperCase());
+    },
+    slugify() {
+      return this.check(_slugify());
+    }
+  });
 });
 var ZodString = /* @__PURE__ */ $constructor("ZodString", (inst, def) => {
   $ZodString.init(inst, def);
@@ -13100,7 +16837,7 @@ function url(params) {
 }
 function httpUrl(params) {
   return _url(ZodURL, {
-    protocol: /^https?$/,
+    protocol: exports_regexes.httpProtocol,
     hostname: exports_regexes.domain,
     ...exports_util.normalizeParams(params)
   });
@@ -13242,21 +16979,53 @@ var ZodNumber = /* @__PURE__ */ $constructor("ZodNumber", (inst, def) => {
   $ZodNumber.init(inst, def);
   ZodType.init(inst, def);
   inst._zod.processJSONSchema = (ctx, json, params) => numberProcessor(inst, ctx, json, params);
-  inst.gt = (value, params) => inst.check(_gt(value, params));
-  inst.gte = (value, params) => inst.check(_gte(value, params));
-  inst.min = (value, params) => inst.check(_gte(value, params));
-  inst.lt = (value, params) => inst.check(_lt(value, params));
-  inst.lte = (value, params) => inst.check(_lte(value, params));
-  inst.max = (value, params) => inst.check(_lte(value, params));
-  inst.int = (params) => inst.check(int(params));
-  inst.safe = (params) => inst.check(int(params));
-  inst.positive = (params) => inst.check(_gt(0, params));
-  inst.nonnegative = (params) => inst.check(_gte(0, params));
-  inst.negative = (params) => inst.check(_lt(0, params));
-  inst.nonpositive = (params) => inst.check(_lte(0, params));
-  inst.multipleOf = (value, params) => inst.check(_multipleOf(value, params));
-  inst.step = (value, params) => inst.check(_multipleOf(value, params));
-  inst.finite = () => inst;
+  _installLazyMethods(inst, "ZodNumber", {
+    gt(value, params) {
+      return this.check(_gt(value, params));
+    },
+    gte(value, params) {
+      return this.check(_gte(value, params));
+    },
+    min(value, params) {
+      return this.check(_gte(value, params));
+    },
+    lt(value, params) {
+      return this.check(_lt(value, params));
+    },
+    lte(value, params) {
+      return this.check(_lte(value, params));
+    },
+    max(value, params) {
+      return this.check(_lte(value, params));
+    },
+    int(params) {
+      return this.check(int(params));
+    },
+    safe(params) {
+      return this.check(int(params));
+    },
+    positive(params) {
+      return this.check(_gt(0, params));
+    },
+    nonnegative(params) {
+      return this.check(_gte(0, params));
+    },
+    negative(params) {
+      return this.check(_lt(0, params));
+    },
+    nonpositive(params) {
+      return this.check(_lte(0, params));
+    },
+    multipleOf(value, params) {
+      return this.check(_multipleOf(value, params));
+    },
+    step(value, params) {
+      return this.check(_multipleOf(value, params));
+    },
+    finite() {
+      return this;
+    }
+  });
   const bag = inst._zod.bag;
   inst.minValue = Math.max(bag.minimum ?? Number.NEGATIVE_INFINITY, bag.exclusiveMinimum ?? Number.NEGATIVE_INFINITY) ?? null;
   inst.maxValue = Math.min(bag.maximum ?? Number.POSITIVE_INFINITY, bag.exclusiveMaximum ?? Number.POSITIVE_INFINITY) ?? null;
@@ -13403,11 +17172,23 @@ var ZodArray = /* @__PURE__ */ $constructor("ZodArray", (inst, def) => {
   ZodType.init(inst, def);
   inst._zod.processJSONSchema = (ctx, json, params) => arrayProcessor(inst, ctx, json, params);
   inst.element = def.element;
-  inst.min = (minLength, params) => inst.check(_minLength(minLength, params));
-  inst.nonempty = (params) => inst.check(_minLength(1, params));
-  inst.max = (maxLength, params) => inst.check(_maxLength(maxLength, params));
-  inst.length = (len, params) => inst.check(_length(len, params));
-  inst.unwrap = () => inst.element;
+  _installLazyMethods(inst, "ZodArray", {
+    min(n, params) {
+      return this.check(_minLength(n, params));
+    },
+    nonempty(params) {
+      return this.check(_minLength(1, params));
+    },
+    max(n, params) {
+      return this.check(_maxLength(n, params));
+    },
+    length(n, params) {
+      return this.check(_length(n, params));
+    },
+    unwrap() {
+      return this.element;
+    }
+  });
 });
 function array(element, params) {
   return _array(ZodArray, element, params);
@@ -13423,23 +17204,47 @@ var ZodObject = /* @__PURE__ */ $constructor("ZodObject", (inst, def) => {
   exports_util.defineLazy(inst, "shape", () => {
     return def.shape;
   });
-  inst.keyof = () => _enum2(Object.keys(inst._zod.def.shape));
-  inst.catchall = (catchall) => inst.clone({ ...inst._zod.def, catchall });
-  inst.passthrough = () => inst.clone({ ...inst._zod.def, catchall: unknown() });
-  inst.loose = () => inst.clone({ ...inst._zod.def, catchall: unknown() });
-  inst.strict = () => inst.clone({ ...inst._zod.def, catchall: never() });
-  inst.strip = () => inst.clone({ ...inst._zod.def, catchall: undefined });
-  inst.extend = (incoming) => {
-    return exports_util.extend(inst, incoming);
-  };
-  inst.safeExtend = (incoming) => {
-    return exports_util.safeExtend(inst, incoming);
-  };
-  inst.merge = (other) => exports_util.merge(inst, other);
-  inst.pick = (mask) => exports_util.pick(inst, mask);
-  inst.omit = (mask) => exports_util.omit(inst, mask);
-  inst.partial = (...args) => exports_util.partial(ZodOptional, inst, args[0]);
-  inst.required = (...args) => exports_util.required(ZodNonOptional, inst, args[0]);
+  _installLazyMethods(inst, "ZodObject", {
+    keyof() {
+      return _enum2(Object.keys(this._zod.def.shape));
+    },
+    catchall(catchall) {
+      return this.clone({ ...this._zod.def, catchall });
+    },
+    passthrough() {
+      return this.clone({ ...this._zod.def, catchall: unknown() });
+    },
+    loose() {
+      return this.clone({ ...this._zod.def, catchall: unknown() });
+    },
+    strict() {
+      return this.clone({ ...this._zod.def, catchall: never() });
+    },
+    strip() {
+      return this.clone({ ...this._zod.def, catchall: undefined });
+    },
+    extend(incoming) {
+      return exports_util.extend(this, incoming);
+    },
+    safeExtend(incoming) {
+      return exports_util.safeExtend(this, incoming);
+    },
+    merge(other) {
+      return exports_util.merge(this, other);
+    },
+    pick(mask) {
+      return exports_util.pick(this, mask);
+    },
+    omit(mask) {
+      return exports_util.omit(this, mask);
+    },
+    partial(...args) {
+      return exports_util.partial(ZodOptional, this, args[0]);
+    },
+    required(...args) {
+      return exports_util.required(ZodNonOptional, this, args[0]);
+    }
+  });
 });
 function object(shape, params) {
   const def = {
@@ -13544,6 +17349,14 @@ var ZodRecord = /* @__PURE__ */ $constructor("ZodRecord", (inst, def) => {
   inst.valueType = def.valueType;
 });
 function record(keyType, valueType, params) {
+  if (!valueType || !valueType._zod) {
+    return new ZodRecord({
+      type: "record",
+      keyType: string2(),
+      valueType: keyType,
+      ...exports_util.normalizeParams(valueType)
+    });
+  }
   return new ZodRecord({
     type: "record",
     keyType,
@@ -13715,10 +17528,12 @@ var ZodTransform = /* @__PURE__ */ $constructor("ZodTransform", (inst, def) => {
     if (output instanceof Promise) {
       return output.then((output2) => {
         payload.value = output2;
+        payload.fallback = true;
         return payload;
       });
     }
     payload.value = output;
+    payload.fallback = true;
     return payload;
   };
 });
@@ -13872,6 +17687,20 @@ function codec(in_, out, params) {
     reverseTransform: params.encode
   });
 }
+function invertCodec(codec2) {
+  const def = codec2._zod.def;
+  return new ZodCodec({
+    type: "pipe",
+    in: def.out,
+    out: def.in,
+    transform: def.reverseTransform,
+    reverseTransform: def.transform
+  });
+}
+var ZodPreprocess = /* @__PURE__ */ $constructor("ZodPreprocess", (inst, def) => {
+  ZodPipe.init(inst, def);
+  $ZodPreprocess.init(inst, def);
+});
 var ZodReadonly = /* @__PURE__ */ $constructor("ZodReadonly", (inst, def) => {
   $ZodReadonly.init(inst, def);
   ZodType.init(inst, def);
@@ -13950,8 +17779,8 @@ function custom(fn, _params) {
 function refine(fn, _params = {}) {
   return _refine(ZodCustom, fn, _params);
 }
-function superRefine(fn) {
-  return _superRefine(fn);
+function superRefine(fn, params) {
+  return _superRefine(fn, params);
 }
 var describe2 = describe;
 var meta2 = meta;
@@ -13989,7 +17818,11 @@ function json(params) {
   return jsonSchema;
 }
 function preprocess(fn, schema) {
-  return pipe(transform(fn), schema);
+  return new ZodPreprocess({
+    type: "pipe",
+    in: transform(fn),
+    out: schema
+  });
 }
 // node_modules/zod/v4/classic/compat.js
 var ZodIssueCode = {
@@ -14021,7 +17854,7 @@ var z = {
   ...exports_checks2,
   iso: exports_iso
 };
-var RECOGNIZED_KEYS = new Set([
+var RECOGNIZED_KEYS = /* @__PURE__ */ new Set([
   "$schema",
   "$ref",
   "$defs",
@@ -14097,13 +17930,13 @@ function resolveRef(ref, ctx) {
   if (!ref.startsWith("#")) {
     throw new Error("External $ref is not supported, only local refs (#/...) are allowed");
   }
-  const path2 = ref.slice(1).split("/").filter(Boolean);
-  if (path2.length === 0) {
+  const path11 = ref.slice(1).split("/").filter(Boolean);
+  if (path11.length === 0) {
     return ctx.rootSchema;
   }
   const defsKey = ctx.version === "draft-2020-12" ? "$defs" : "definitions";
-  if (path2[0] === defsKey) {
-    const key = path2[1];
+  if (path11[0] === defsKey) {
+    const key = path11[1];
     if (!key || !ctx.defs[key]) {
       throw new Error(`Reference not found: ${ref}`);
     }
@@ -14395,12 +18228,6 @@ function convertBaseSchema(schema, ctx) {
     default:
       throw new Error(`Unsupported type: ${type}`);
   }
-  if (schema.description) {
-    zodSchema = zodSchema.describe(schema.description);
-  }
-  if (schema.default !== undefined) {
-    zodSchema = zodSchema.default(schema.default);
-  }
   return zodSchema;
 }
 function convertSchema(schema, ctx) {
@@ -14437,6 +18264,9 @@ function convertSchema(schema, ctx) {
   if (schema.readOnly === true) {
     baseSchema = z.readonly(baseSchema);
   }
+  if (schema.default !== undefined) {
+    baseSchema = baseSchema.default(schema.default);
+  }
   const extraMeta = {};
   const coreMetadataKeys = ["$id", "id", "$comment", "$anchor", "$vocabulary", "$dynamicRef", "$dynamicAnchor"];
   for (const key of coreMetadataKeys) {
@@ -14458,23 +18288,32 @@ function convertSchema(schema, ctx) {
   if (Object.keys(extraMeta).length > 0) {
     ctx.registry.add(baseSchema, extraMeta);
   }
+  if (schema.description) {
+    baseSchema = baseSchema.describe(schema.description);
+  }
   return baseSchema;
 }
 function fromJSONSchema(schema, params) {
   if (typeof schema === "boolean") {
     return schema ? z.any() : z.never();
   }
-  const version2 = detectVersion(schema, params?.defaultTarget);
-  const defs = schema.$defs || schema.definitions || {};
+  let normalized;
+  try {
+    normalized = JSON.parse(JSON.stringify(schema));
+  } catch {
+    throw new Error("fromJSONSchema input is not valid JSON (possibly cyclic); use $defs/$ref for recursive schemas");
+  }
+  const version2 = detectVersion(normalized, params?.defaultTarget);
+  const defs = normalized.$defs || normalized.definitions || {};
   const ctx = {
     version: version2,
     defs,
     refs: new Map,
     processing: new Set,
-    rootSchema: schema,
+    rootSchema: normalized,
     registry: params?.registry ?? globalRegistry
   };
-  return convertSchema(schema, ctx);
+  return convertSchema(normalized, ctx);
 }
 // node_modules/zod/v4/classic/coerce.js
 var exports_coerce = {};
@@ -14613,8 +18452,8 @@ function createSharkEvidenceTool(evidenceCollector) {
 
 // src/tools/checkpoint.ts
 import { tool as tool4 } from "@opencode-ai/plugin";
-import * as path2 from "path";
-import * as fs3 from "fs";
+import * as path11 from "path";
+import * as fs11 from "fs";
 function createCheckpointTool(stateStore, _gateManager) {
   return tool4({
     description: "Create a checkpoint of current Shark state for recovery",
@@ -14624,15 +18463,15 @@ function createCheckpointTool(stateStore, _gateManager) {
     execute: async (args) => {
       const { message } = args;
       const checkpointId = `cp_${Date.now()}`;
-      const checkpointDir = path2.join(process.cwd(), ".shark", "checkpoints");
-      await fs3.promises.mkdir(checkpointDir, { recursive: true });
+      const checkpointDir = path11.join(process.cwd(), ".shark", "checkpoints");
+      await fs11.promises.mkdir(checkpointDir, { recursive: true });
       const checkpointData = {
         id: checkpointId,
         timestamp: new Date().toISOString(),
         message: message || "checkpoint",
         state: stateStore.snapshot()
       };
-      await fs3.promises.writeFile(path2.join(checkpointDir, `${checkpointId}.json`), JSON.stringify(checkpointData, null, 2));
+      await fs11.promises.writeFile(path11.join(checkpointDir, `${checkpointId}.json`), JSON.stringify(checkpointData, null, 2));
       return `Checkpoint created: \`${checkpointId}\``;
     }
   });
@@ -14640,16 +18479,16 @@ function createCheckpointTool(stateStore, _gateManager) {
 
 // src/tools/shark-test-runner.ts
 import { tool as tool5 } from "@opencode-ai/plugin";
-import * as fs4 from "fs";
-import * as path3 from "path";
+import * as fs12 from "fs";
+import * as path12 from "path";
 function getBasePath() {
   return process.cwd();
 }
 function getPluginPath() {
-  const configPath = path3.join(getBasePath(), "opencode.json");
-  if (fs4.existsSync(configPath)) {
+  const configPath = path12.join(getBasePath(), "opencode.json");
+  if (fs12.existsSync(configPath)) {
     try {
-      const config2 = JSON.parse(fs4.readFileSync(configPath, "utf-8"));
+      const config2 = JSON.parse(fs12.readFileSync(configPath, "utf-8"));
       const pluginPath = config2.plugin?.find((p) => p.includes("shark-agent"));
       if (pluginPath) {
         const url2 = new URL(pluginPath);
@@ -14668,8 +18507,8 @@ function runOpenCode(command, timeout = 30000) {
       cwd: "/root/.config/opencode"
     });
     return { output, error: null };
-  } catch (error49) {
-    const errorMsg = error49 instanceof Error ? error49.message : "Unknown error";
+  } catch (error51) {
+    const errorMsg = error51 instanceof Error ? error51.message : "Unknown error";
     return { output: errorMsg, error: errorMsg };
   }
 }
@@ -14808,25 +18647,25 @@ var TEST_SUITE = [
   {
     name: "evidence-dir-writable",
     test: async () => {
-      const sharkDir = path3.join(getBasePath(), ".shark");
-      const evidenceDir = path3.join(sharkDir, "evidence", "test");
+      const sharkDir = path12.join(getBasePath(), ".shark");
+      const evidenceDir = path12.join(sharkDir, "evidence", "test");
       try {
-        fs4.mkdirSync(evidenceDir, { recursive: true });
-        const testFile = path3.join(evidenceDir, "test-" + Date.now() + ".json");
-        fs4.writeFileSync(testFile, JSON.stringify({ test: true, timestamp: Date.now() }));
-        fs4.unlinkSync(testFile);
-        fs4.rmdirSync(evidenceDir);
+        fs12.mkdirSync(evidenceDir, { recursive: true });
+        const testFile = path12.join(evidenceDir, "test-" + Date.now() + ".json");
+        fs12.writeFileSync(testFile, JSON.stringify({ test: true, timestamp: Date.now() }));
+        fs12.unlinkSync(testFile);
+        fs12.rmdirSync(evidenceDir);
         return {
           name: "evidence-dir-writable",
           passed: true,
           output: "Evidence directory is writable",
           timestamp: Date.now()
         };
-      } catch (error49) {
+      } catch (error51) {
         return {
           name: "evidence-dir-writable",
           passed: false,
-          output: `Evidence dir not writable: ${error49 instanceof Error ? error49.message : "Unknown"}`,
+          output: `Evidence dir not writable: ${error51 instanceof Error ? error51.message : "Unknown"}`,
           timestamp: Date.now()
         };
       }
@@ -14836,7 +18675,7 @@ var TEST_SUITE = [
     name: "plugin-bundle-valid",
     test: async () => {
       const pluginPath = getPluginPath();
-      const exists = fs4.existsSync(pluginPath);
+      const exists = fs12.existsSync(pluginPath);
       if (!exists) {
         return {
           name: "plugin-bundle-valid",
@@ -14845,7 +18684,7 @@ var TEST_SUITE = [
           timestamp: Date.now()
         };
       }
-      const stat = fs4.statSync(pluginPath);
+      const stat = fs12.statSync(pluginPath);
       const sizeKB = Math.round(stat.size / 1024);
       const valid = sizeKB > 500;
       return {
@@ -14898,11 +18737,11 @@ function createSharkTestRunnerTool() {
             const result = await testDef.test();
             results.push(result);
             console.log(`[SHARK TEST] ${result.passed ? "\u2713" : "\u2717"} ${testDef.name}: ${result.output.slice(0, 100)}`);
-          } catch (error49) {
+          } catch (error51) {
             results.push({
               name: testDef.name,
               passed: false,
-              output: `Test error: ${error49 instanceof Error ? error49.message : "Unknown"}`,
+              output: `Test error: ${error51 instanceof Error ? error51.message : "Unknown"}`,
               timestamp: Date.now()
             });
             console.log(`[SHARK TEST] \u2717 ${testDef.name}: ERROR`);
@@ -14924,13 +18763,13 @@ function createSharkTestRunnerTool() {
           passRate
         };
         try {
-          const evidenceDir = path3.join(getBasePath(), ".shark", "evidence", "delivery");
-          fs4.mkdirSync(evidenceDir, { recursive: true });
-          const evidencePath = path3.join(evidenceDir, "ContainerTestResult.json");
-          fs4.writeFileSync(evidencePath, JSON.stringify(suiteResult, null, 2));
+          const evidenceDir = path12.join(getBasePath(), ".shark", "evidence", "delivery");
+          fs12.mkdirSync(evidenceDir, { recursive: true });
+          const evidencePath = path12.join(evidenceDir, "ContainerTestResult.json");
+          fs12.writeFileSync(evidencePath, JSON.stringify(suiteResult, null, 2));
           console.log(`[SHARK TEST] Evidence written to: ${evidencePath}`);
-        } catch (error49) {
-          console.log(`[SHARK TEST] Warning: Could not write evidence file: ${error49}`);
+        } catch (error51) {
+          console.log(`[SHARK TEST] Warning: Could not write evidence file: ${error51}`);
         }
         let summary = `Test suite: ${id}
 `;
@@ -14959,1377 +18798,86 @@ if (false) {
   async function runStandalone() {}
 }
 
-// src/hooks/v4.1/utils.ts
-function extractCommandFromArgs(args) {
-  if (!args)
-    return null;
-  const a = args;
-  return a.command || a.cmd || null;
-}
-
-// src/hooks/v4.1/agent-state.ts
-var DEFAULT_SESSION = "default";
-var agentBySession = new Map;
-var SESSION_TTL_MS = 24 * 60 * 60 * 1000;
-function cleanupStaleSessions() {
-  const now = Date.now();
-  for (const [sessionId, state] of agentBySession.entries()) {
-    if (now - state.timestamp > SESSION_TTL_MS) {
-      agentBySession.delete(sessionId);
-    }
-  }
-}
-function setCurrentAgent(agent, sessionId) {
-  const sid = sessionId || DEFAULT_SESSION;
-  agentBySession.set(sid, {
-    agent,
-    timestamp: Date.now()
-  });
-}
-function getCurrentAgent(sessionId) {
-  cleanupStaleSessions();
-  const sid = sessionId || DEFAULT_SESSION;
-  const state = agentBySession.get(sid);
-  return state?.agent;
-}
-function clearCurrentAgent(sessionId) {
-  const sid = sessionId || DEFAULT_SESSION;
-  agentBySession.delete(sid);
-}
-
-// src/shared/firewall-patterns.ts
-var HOST_FALLBACK_PATTERNS = [
-  /host.*testing.*already.*works/i,
-  /fall.*back.*to.*host/i,
-  /host.*already.*proves/i,
-  /local.*works.*container.*not.*needed/i,
-  /since.*host.*works/i,
-  /skip.*container.*test/i,
-  /container.*not.*necessary/i,
-  /container.*not.*needed/i,
-  /not.*need.*container/i,
-  /skip.*container/i,
-  /use.*host.*instead/i,
-  /host.*prove.*it.*works/i,
-  /already.*proven.*to.*work/i,
-  /already.*verified.*on.*host/i,
-  /already.*tested.*on.*local/i
+// src/tools/firewall-status.ts
+import { tool as tool6 } from "@opencode-ai/plugin";
+var ENABLED_LAYERS = [
+  "L0 \u2013 Identity Wall",
+  "L1 \u2013 Theatrical Detection",
+  "L2 \u2013 Test Framework Bypass",
+  "L3 \u2013 Source Inspection Theater",
+  "L4 \u2013 Wrong Container",
+  "L5.1 \u2013 Host Fallback",
+  "L5.2 \u2013 Success Claim Without Proof",
+  "L5.3 \u2013 Model Restriction",
+  "L5.4 \u2013 Mock/Stub Data",
+  "L5.5 \u2013 Oversimplification",
+  "L5.6 \u2013 Confusion Pretense",
+  "L5.7 \u2013 Scope Creep",
+  "L5.8 \u2013 Undermining",
+  "L5.9 \u2013 Impatience",
+  "L5.10 \u2013 Self-Reference"
 ];
-var SUCCESS_CLAIM_PATTERNS = [
-  /it.*works.*trust.*me/i,
-  /trust.*me.*it.*works/i,
-  /believe.*me.*it.*works/i,
-  /already.*verified.*by.*myself/i,
-  /already.*tested.*and.*works/i,
-  /obviously.*correct/i,
-  /clearly.*works/i,
-  /self.*evidently.*correct/i,
-  /in.*my.*assessment.*it.*works/i,
-  /in.*my.*experience.*it.*works/i,
-  /based.*on.*my.*analysis.*works/i,
-  /no.*need.*for.*test/i,
-  /no.*need.*for.*verification/i,
-  /no.*further.*test.*needed/i
-];
-var MODEL_RESTRICTION_PATTERNS = [
-  /only.*gpt/i,
-  /only.*claude/i,
-  /only.*gemini/i,
-  /only.*llama/i,
-  /must.*use.*gpt/i,
-  /must.*use.*claude/i,
-  /restricted.*to.*model/i,
-  /model.*quota/i,
-  /model.*limit/i,
-  /rate.*limit.*excuse/i,
-  /api.*key.*issue/i,
-  /can't.*afford.*model/i,
-  /too.*expensive.*model/i,
-  /model.*cost.*too.*high/i,
-  /switch.*model.*\u7406\u7531/i
-];
-var MOCK_STUB_PATTERNS = [
-  /mock.*data/i,
-  /stub.*data/i,
-  /fake.*data/i,
-  /dummy.*data/i,
-  /sample.*data/i,
-  /test.*data.*only/i,
-  /mocked.*response/i,
-  /stubbed.*response/i,
-  /fake.*api/i,
-  /hardcoded.*response/i,
-  /static.*json.*instead/i,
-  /no.*real.*api/i
-];
-var SIMPLIFICATION_PATTERNS = [
-  /over.*simplif/i,
-  /overly.*simplif/i,
-  /too.*simpl/i,
-  /oversimplif/i,
-  /hand.*wave/i,
-  /handwave/i,
-  /gloss.*over/i,
-  /glossed.*over/i,
-  /skip.*detail/i,
-  /skip.*nuance/i
-];
-var CONFUSION_PRETENSE_PATTERNS = [
-  /it.*somewhat.*works/i,
-  /sorta.*works/i,
-  /kinda.*works/i,
-  /more.*or.*less/i,
-  /mostly.*works/i,
-  /approximately.*correct/i,
-  /basically.*correct/i,
-  /essentially.*works/i,
-  /nominally.*functional/i,
-  /partially.*implemented/i,
-  /partially.*working/i,
-  /somewhat.*correct/i
-];
-var SCOPE_CREEP_PATTERNS = [
-  /while.*at.*it/i,
-  /while.*we.*re.*at.*it/i,
-  /at.*the.*same.*time/i,
-  /also.*need.*to/i,
-  /might.*as.*well/i,
-  /\u987A\u4FBF/i,
-  /\u987A\u4FBF\u8BF4\u4E00\u4E0B/i,
-  /just.*to.*be.*thorough/i,
-  /for.*completeness/i,
-  /one.*more.*thing/i,
-  /oh.*and.*also/i,
-  /on.*the.*side/i
-];
-var CROSS_AGENT_TOOLS = new Set([
-  "hermes_remember",
-  "hermes_recall",
-  "hermes_context",
-  "hive_remember",
-  "hive_context",
-  "hive_status",
-  "kraken_hive_remember",
-  "kraken_hive_search",
-  "kraken_hive_get_cluster_context",
-  "memremember",
-  "memsearch",
-  "memread",
-  "membrowse",
-  "memcommit",
-  "knowledge_remember",
-  "knowledge_recall",
-  "knowledge_query"
-]);
-var CROSS_AGENT_PATTERNS = [
-  /hermes_remember/i,
-  /hermes_recall/i,
-  /hermes_context/i,
-  /hive_remember/i,
-  /hive_context/i,
-  /hive_status/i,
-  /hive_mind/i,
-  /kraken_hive/i,
-  /memremember/i,
-  /memsearch/i,
-  /memread/i,
-  /membrowse/i,
-  /knowledge_remember/i,
-  /knowledge_recall/i,
-  /knowledge_query/i
-];
-var UNDERMINING_PATTERNS = [
-  /not.*worth.*the.*effort/i,
-  /too.*much.*work/i,
-  /not.*worth.*it/i,
-  /diminishing.*returns/i,
-  /marginal.*benefit/i,
-  /minimal.*gain/i,
-  /savvy.*engineer.*would/i,
-  /experienced.*developer.*would/i,
-  /realistic.*timeline/i,
-  /realistically/i,
-  /practically.*impossible/i,
-  /realistically.*impractical/i
-];
-var IMPATIENCE_PATTERNS = [
-  /let's.*just.*move.*on/i,
-  /let's.*skip.*to.*the.*end/i,
-  /good.*enough/i,
-  /close.*enough/i,
-  /ship.*it/i,
-  /just.*deploy/i,
-  /ship\s+(it|now)\b/i,
-  /deploy\s+now/i,
-  /let's.*hurry/i
-];
-var SELF_REFERENCE_PATTERNS = [
-  /i.*have.*verified.*that/i,
-  /i.*verified.*it.*works/i,
-  /my.*verification.*shows/i,
-  /i.*tested.*it.*works/i,
-  /i.*ran.*it.*and.*works/i,
-  /my.*testing.*confirms/i,
-  /i.*know.*it.*works/i,
-  /i.*am.*certain.*it.*works/i,
-  /my.*assessment.*is/i,
-  /in.*my.*assessment/i,
-  /my.*analysis.*shows/i
-];
-var DANGEROUS_TOOLS = new Set([
-  "terminal",
-  "mcp_terminal",
-  "bash",
-  "mcp_bash",
-  "write_file",
-  "mcp_write_file",
-  "patch",
-  "mcp_patch",
-  "edit",
-  "mcp_edit",
-  "delete_file",
-  "mcp_delete_file"
-]);
-var CONTAINER_TEST_RESULT_FILE = "ContainerTestResult.json";
-var BEHAVIORAL_PATTERNS = [
-  { label: "Confused avoidance", pattern: /i('?m| am) confused about (the )?(goal|task|purpose|direction)/i },
-  { label: "Already works claim", pattern: /(host|local).*(already|proves).*(works|correct)/i },
-  { label: "Simplify excuse", pattern: /(maybe|perhaps).*simplif/i },
-  { label: "Goal reset", pattern: /what was the (user.?s |original )?goal/i },
-  { label: "Basic solution shortcut", pattern: /(just|simply) use .*(instead|rather)/i },
-  { label: "Self-assessment claim", pattern: /in my (assessment|experience|analysis)/i, requireEvidence: true },
-  { label: "Scope expansion", pattern: /(while|whilst).*(at it|we.?re at it|also)|should also (fix|add|do)/i },
-  { label: "False fix claim", pattern: /(should be |is )?fixed now|should (be |)working now/i },
-  { label: "Superficial check", pattern: /let me (just )?(check|verify|confirm) (real )?quick/i },
-  { label: "Trust me deflection", pattern: /trust me|i promise|believe me|it.?ll be fine/i, requireEvidence: true },
-  { label: "Task avoidance", pattern: /(maybe|perhaps|let.?s).*(come back|revisit|later|another time)/i },
-  { label: "Overthinking stall", pattern: /(hmm|um|uh).*(thinking|wonder|ponder)/i },
-  { label: "Derail: reading sensitive", pattern: /read(ing)? .*(ssh|key|credential|secret|token|passwd|shadow|\.env|auth)/i },
-  { label: "Derail: exploring system", pattern: /let me (explore|check|look at|see).*(system|root|other|different|whole)/i },
-  { label: "Derail: data exfil", pattern: /(dump|print|output|show) (full|entire|all|complete).*(key|secret|credential|config)/i }
-];
-
-// src/hooks/v4.1/guardian-hook.ts
-var DANGEROUS_TOOLS2 = new Set([
-  "terminal",
-  "mcp_terminal",
-  "bash",
-  "mcp_bash",
-  "write_file",
-  "mcp_write_file",
-  "patch",
-  "mcp_patch",
-  "edit",
-  "mcp_edit",
-  "delete_file",
-  "mcp_delete_file"
-]);
-var THEATRICAL_PATTERNS = [
-  /\|.*wc\s+-l/i,
-  /wc\s+-l.*\|/i,
-  /cat.*\|.*wc/i,
-  /grep.*\|.*wc/i,
-  /\|.*tee/i,
-  /\|.*>.*\./i,
-  /wc\s+-l.*dist\//i,
-  /wc\s+-l.*src\//i,
-  /wc\s+-l.*build\//i,
-  /grep.*setCurrentAgent.*src/i,
-  /grep.*isSharkAgent.*src/i,
-  /grep.*guardian.*src/i
-];
-var LEGITIMATE_PATTERNS = [
-  /mkdir\s+-p/i,
-  /cp\s+-r/i,
-  /mv\s+/i,
-  /cat\s+[^\|>]+$/i,
-  /head\s+-[0-9]+\s+/i,
-  /tail\s+-[0-9]+\s+/i,
-  /grep\s+-[rEn]+.*[^\|]$/i,
-  /find\s+.*-name/i,
-  /test\s+-d/i,
-  /test\s+-x/i
-];
-var FAKE_TEST_PATTERNS = [
-  /node\s+run-tests?\.js/i,
-  /node\s+verify.*\.mjs/i,
-  /npm\s+(run\s+)?test/i,
-  /yarn\s+(run\s+)?test/i,
-  /jest/i,
-  /vitest/i,
-  /mocha/i,
-  /jasmine/i,
-  /bun\s+test/i,
-  /pytest/i,
-  /python.*-m.*pytest/i,
-  /go\s+test/i,
-  /cargo\s+test/i,
-  /ruby\s+-Itest/i,
-  /rspec/i
-];
-var SOURCE_INSPECTION_PATTERNS = [
-  /test\s+-[fed]\s+/i,
-  /if\s+\[\s*-[fes]\s+.*\]\s*;/i,
-  /stat\s+/i,
-  /find\s+.*src/i,
-  /ls\s+-l.*(dist|src|build)\//i
-];
-var WRONG_CONTAINER_PATTERNS = [
-  /opencode\s+container\s+run/i,
-  /opencode\s+container\s+start/i,
-  /opencode\s+container\s+exec/i,
-  /opencode\s+run\s+/i
-];
-function checkTheatricalVerification(command) {
-  if (!command)
-    return;
-  for (const pattern of LEGITIMATE_PATTERNS) {
-    if (pattern.test(command)) {
-      return;
-    }
-  }
-  for (const pattern of THEATRICAL_PATTERNS) {
-    if (pattern.test(command)) {
-      throw new Error(`[L1 BLOCKED] Counting theater: ${command}`);
-    }
-  }
-}
-function checkFakeTestRunner(command) {
-  if (!command)
-    return;
-  for (const pattern of FAKE_TEST_PATTERNS) {
-    if (pattern.test(command)) {
-      throw new Error(`[L2 BLOCKED] Fake test runner: ${command}`);
-    }
-  }
-}
-function checkSourceInspection(command) {
-  if (!command)
-    return;
-  for (const pattern of SOURCE_INSPECTION_PATTERNS) {
-    if (pattern.test(command)) {
-      throw new Error(`[L3 BLOCKED] Source inspection: ${command}`);
-    }
-  }
-}
-function checkWrongContainer(command) {
-  if (!command)
-    return;
-  for (const pattern of WRONG_CONTAINER_PATTERNS) {
-    if (pattern.test(command)) {
-      throw new Error(`[L4 BLOCKED] Wrong container: ${command}`);
-    }
-  }
-}
-function checkCrossAgentTools(tool6) {
-  if (CROSS_AGENT_TOOLS.has(tool6)) {
-    throw new Error(`[L5.7 BLOCKED] Cross-agent tool: ${tool6}`);
-  }
-}
-function createGuardianHook(guardian) {
-  return async (input, output) => {
-    const { tool: tool6, sessionID } = input;
-    const args = output?.args;
-    const command = extractCommandFromArgs(args);
-    const sessionAgent = getCurrentAgent(sessionID);
-    const toolBasedAgent = tool6?.startsWith("shark-") || tool6 === "checkpoint" ? "shark" : undefined;
-    const currentAgent = sessionAgent || toolBasedAgent;
-    const isShark = currentAgent === "shark" || currentAgent?.startsWith("shark_");
-    if (toolBasedAgent && !sessionAgent) {
-      setCurrentAgent(toolBasedAgent, sessionID);
-    }
-    if (!isShark)
-      return;
-    checkCrossAgentTools(tool6);
-    if (command && guardian.isDangerousCommand(command)) {
-      throw new Error(`[GUARDIAN] DANGEROUS_COMMAND_BLOCKED: ${command}`);
-    }
-    if ((tool6.includes("write_file") || tool6.includes("patch")) && args) {
-      const a = args;
-      const writePath = a.path || null;
-      if (writePath && !guardian.canWrite(writePath)) {
-        throw new Error(`[GUARDIAN] ZONE_VIOLATION: ${guardian.classifyZone(writePath)} zone \u2014 ${writePath}`);
+function createFirewallStatusTool() {
+  return tool6({
+    description: "Show firewall status including enabled layers, audit entry count, and last block time",
+    args: {},
+    async execute(_args) {
+      const auditLogger = new FirewallAudit(process.cwd());
+      const entries = auditLogger.getEntries();
+      const entryCount = entries.length;
+      let lastBlockTime = "never";
+      if (entryCount > 0) {
+        const last = entries[entryCount - 1];
+        lastBlockTime = last.timestamp;
       }
-      if (writePath)
-        guardian.registerCreate(writePath);
-    }
-    if (DANGEROUS_TOOLS2.has(tool6)) {
-      if (command) {
-        checkTheatricalVerification(command);
-        checkFakeTestRunner(command);
-      }
-      if (currentAgent && currentAgent !== "shark" && !currentAgent.startsWith("shark_")) {
-        throw new Error(`[L0 BLOCKED] Brain uninitialized for: ${tool6}`);
-      }
-    }
-    checkSourceInspection(command);
-    checkWrongContainer(command);
-    if ((tool6 === "edit" || tool6 === "mcp_edit") && args) {
-      const ea = args;
-      if (ea?.filePath) {
-        if (!guardian.canEdit(ea.filePath))
-          throw new Error(`[GUARDIAN] Edit blocked: ${ea.filePath}`);
-        guardian.registerEdit(ea.filePath);
-      }
-    }
-    if (command) {
-      const mc = guardian.canModifyFile(command);
-      if (!mc.allowed)
-        throw new Error(`[GUARDIAN] SOURCE_FILE_MODIFY_BLOCKED: ${mc.filePath}`);
-    }
-  };
-}
-
-// src/shared/agent-identity.ts
-var VANILLA_AGENTS = new Set(["plan", "build", "general", "explore"]);
-var SHARK_AGENTS = new Set(["shark"]);
-var SHARK_PREFIX = "shark_";
-function isSharkAgent(agentName) {
-  if (!agentName)
-    return false;
-  if (SHARK_AGENTS.has(agentName))
-    return true;
-  if (agentName.startsWith(SHARK_PREFIX))
-    return true;
-  return false;
-}
-
-// src/hooks/v4.1/gate-hook.ts
-import * as fs5 from "fs";
-import * as path4 from "path";
-var CONTAINER_TEST_RESULT_FILE2 = "ContainerTestResult.json";
-var lastDeliveryBlocked = false;
-function resetGateHookState() {
-  lastDeliveryBlocked = false;
-}
-function createGateHook(gateManager, evidenceCollector, peerDispatch) {
-  return async (input, output) => {
-    const { tool: tool6, sessionID } = input;
-    if (!isSharkAgent(getCurrentAgent(sessionID))) {
-      return;
-    }
-    const args = input.args;
-    const result = output.output;
-    const currentGate = gateManager.getCurrentGate();
-    if (tool6 === "shark-test-runner") {
-      const testResult = parseTestRunnerResult(result);
-      if (testResult) {
-        const evidencePath = path4.join(process.cwd(), ".shark", "evidence", currentGate, CONTAINER_TEST_RESULT_FILE2);
-        try {
-          fs5.mkdirSync(path4.dirname(evidencePath), { recursive: true });
-          fs5.writeFileSync(evidencePath, JSON.stringify(testResult));
-        } catch {}
-        const gateEvidence = {
-          gate: currentGate,
-          timestamp: Date.now(),
-          passed: testResult.overallPassed,
-          files: [evidencePath],
-          metadata: {
-            tool: "shark-test-runner",
-            sessionID,
-            testSuite: testResult.suite,
-            passedTests: testResult.passedTests,
-            totalTests: testResult.totalTests,
-            overallPassed: testResult.overallPassed
-          }
-        };
-        evidenceCollector.collectEvidence(gateEvidence);
-      }
-    }
-    const evidence = buildEvidenceRecord(tool6, args, result);
-    if (evidence) {
-      const gateEvidence = {
-        gate: currentGate,
-        timestamp: Date.now(),
-        passed: true,
-        files: evidence.files || [],
-        metadata: { tool: tool6, sessionID, workEvidence: evidence.workEvidence }
-      };
-      evidenceCollector.collectEvidence(gateEvidence);
-    }
-    if (currentGate === "delivery" && !lastDeliveryBlocked) {
-      const deliveryBlocked = checkDeliveryGateBlocked();
-      lastDeliveryBlocked = deliveryBlocked;
-      if (deliveryBlocked) {
-        if (tool6 === "terminal" || tool6 === "bash") {
-          const cmd = extractCommandFromArgs(args) || "";
-          if (/git.*commit|ship|release|deploy|deliver/i.test(cmd)) {
-            throw new Error(`[SHARK DELIVERY BLOCKED] You MUST run 'shark-test-runner' with action='run' before delivery.`);
-          }
-        }
-      }
-    }
-    const shouldAdvance = checkGateAdvance(tool6, args, result, currentGate);
-    if (shouldAdvance && gateManager.canTransition(shouldAdvance)) {
-      gateManager.passCurrentGate();
-      gateManager.transitionTo(shouldAdvance);
-      if (shouldAdvance === "test" && currentGate === "build" && peerDispatch) {
-        peerDispatch.onBuildComplete();
-      }
-    }
-    if (currentGate === "verify") {
-      const verifyResultStr = String(result || "");
-      const verifyHasFailure = verifyResultStr.includes('"error"') || verifyResultStr.includes('"status":"error"') || verifyResultStr.includes("fail") || verifyResultStr.includes("FAIL");
-      if (verifyHasFailure) {
-        const verifyLoopResult = gateManager.handleVerifyFailure();
-        const state = gateManager.getState();
-        if (peerDispatch && state.verifyAttempts >= 3) {
-          peerDispatch.onGateFailed("verify", state.verifyAttempts);
-        }
-        if (verifyLoopResult.action === "escalate") {}
-      }
-    }
-  };
-}
-function parseTestRunnerResult(result) {
-  if (!result)
-    return null;
-  try {
-    const parsed = typeof result === "string" ? JSON.parse(result) : result;
-    if (parsed && typeof parsed === "object") {
-      return {
-        suite: parsed.suite || "shark-e2e",
-        overallPassed: parsed.overallPassed === true,
-        passedTests: parsed.passedTests || 0,
-        totalTests: parsed.totalTests || 0
-      };
-    }
-  } catch {}
-  return null;
-}
-function checkDeliveryGateBlocked() {
-  const evidencePath = path4.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE2);
-  try {
-    const content = fs5.readFileSync(evidencePath, "utf-8");
-    const testResult = JSON.parse(content);
-    return !testResult.overallPassed;
-  } catch {
-    return true;
-  }
-}
-function buildEvidenceRecord(tool6, args, result) {
-  if (!args)
-    return null;
-  const a = args;
-  switch (tool6) {
-    case "write_file":
-    case "mcp_write_file": {
-      const filePath = a.path;
-      return { files: filePath ? [filePath] : [], workEvidence: `wrote:${filePath}` };
-    }
-    case "patch":
-    case "mcp_patch": {
-      const filePath = a.path;
-      return { files: filePath ? [filePath] : [], workEvidence: `patched:${filePath}` };
-    }
-    case "terminal":
-    case "mcp_terminal": {
-      const cmd = extractCommandFromArgs(args) || "";
-      return { files: [], workEvidence: `ran:${cmd.slice(0, 100)}` };
-    }
-    default:
-      return null;
-  }
-}
-function checkGateAdvance(tool6, args, result, currentGate) {
-  const resultStr = String(result || "");
-  const cmd = extractCommandFromArgs(args) || "";
-  if (currentGate === "build") {
-    if (["write_file", "mcp_write_file", "patch", "mcp_patch"].includes(tool6)) {
-      return "test";
-    }
-  }
-  if (currentGate === "test") {
-    if (/test.*(pass|success|ok)/i.test(resultStr) || /passed.*tests?/i.test(cmd)) {
-      return "verify";
-    }
-  }
-  if (currentGate === "audit") {
-    if (/npm.*audit|yarn.*audit.*0.*vulnerab/i.test(resultStr) || /sast|SAST.*clean|no.*issues/i.test(resultStr) || /0.*critical|0.*high.*vulnerab/i.test(resultStr)) {
-      return "delivery";
-    }
-  }
-  return null;
-}
-
-// src/hooks/v4.1/chat-message-hook.ts
-function createChatMessageHook() {
-  return async (input, output) => {
-    const { agent, sessionID } = input;
-    if (agent && isSharkAgent(agent)) {
-      setCurrentAgent(agent, sessionID);
-    }
-  };
-}
-
-// src/hooks/v4.1/messages-transform-hook.ts
-import * as path5 from "path";
-import * as fs6 from "fs";
-function hasContainerTestEvidence() {
-  const evidencePath = path5.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE);
-  if (!fs6.existsSync(evidencePath))
-    return false;
-  try {
-    const result = JSON.parse(fs6.readFileSync(evidencePath, "utf-8"));
-    return result.overallPassed === true && result.passRate >= 0.96;
-  } catch {
-    return false;
-  }
-}
-function extractAgentText(output) {
-  const messages = output?.messages;
-  if (!messages || messages.length === 0)
-    return { agentText: "", agent: undefined };
-  let agentText = "", agent;
-  for (const msg of messages) {
-    if (msg?.info?.role === "assistant") {
-      if (msg?.info?.agent && !agent)
-        agent = msg.info.agent;
-      if (msg?.parts)
-        for (const part of msg.parts) {
-          if (part?.type === "text" && part?.text)
-            agentText += (agentText ? " " : "") + part.text;
-        }
-    }
-  }
-  return { agentText, agent };
-}
-function check2(text, patterns, label, requireEvidence) {
-  for (const pattern of patterns) {
-    if (pattern.test(text)) {
-      if (requireEvidence && hasContainerTestEvidence())
-        return;
-      throw new Error(`[${label}]`);
-    }
-  }
-}
-function checkL8Behavioral(text) {
-  for (const sig of BEHAVIORAL_PATTERNS) {
-    if (sig.pattern.test(text)) {
-      if (sig.requireEvidence && hasContainerTestEvidence())
-        return;
-      throw new Error(`[L8] ${sig.label}`);
-    }
-  }
-}
-function enforceAgentOutput(text) {
-  check2(text, HOST_FALLBACK_PATTERNS, "L5.1 Host fallback");
-  check2(text, SUCCESS_CLAIM_PATTERNS, "L5.2 Success claim without proof", true);
-  check2(text, MODEL_RESTRICTION_PATTERNS, "L5.3 Model restriction");
-  check2(text, MOCK_STUB_PATTERNS, "L5.4 Mock/stub data", true);
-  check2(text, SIMPLIFICATION_PATTERNS, "L5.5 Oversimplification");
-  check2(text, CONFUSION_PRETENSE_PATTERNS, "L5.6 Confusion pretense");
-  checkScopeCreepWithCrossAgent(text);
-  check2(text, UNDERMINING_PATTERNS, "L5.8 Undermining");
-  check2(text, IMPATIENCE_PATTERNS, "L5.9 Impatience");
-  check2(text, SELF_REFERENCE_PATTERNS, "L5.10 Self-reference", true);
-  checkL8Behavioral(text);
-}
-function checkScopeCreepWithCrossAgent(text) {
-  for (const pattern of SCOPE_CREEP_PATTERNS) {
-    if (pattern.test(text)) {
-      for (const cap of CROSS_AGENT_PATTERNS) {
-        if (cap.test(text))
-          throw new Error(`[L5.7] Cross-agent tool`);
-      }
-      throw new Error(`[L5.7] Scope creep`);
-    }
-  }
-}
-function createMessagesTransformHook() {
-  return async (input, output) => {
-    try {
-      const { agentText, agent } = extractAgentText(output);
-      if (!agent || !isSharkAgent(agent))
-        return;
-      setCurrentAgent(agent);
-      if (!agentText || !agentText.trim())
-        return;
-      enforceAgentOutput(agentText);
-    } catch (e) {
-      throw e;
-    }
-  };
-}
-
-// src/hooks/v4.1/command-execute-hook.ts
-import * as path6 from "path";
-import * as fs7 from "fs";
-var CONTAINER_TEST_RESULT_FILE3 = "ContainerTestResult.json";
-function hasContainerTestEvidence2() {
-  const evidencePath = path6.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE3);
-  if (!fs7.existsSync(evidencePath)) {
-    return false;
-  }
-  try {
-    const result = JSON.parse(fs7.readFileSync(evidencePath, "utf-8"));
-    return result.overallPassed === true && result.passRate >= 0.96;
-  } catch {
-    return false;
-  }
-}
-var THEATRICAL_PATTERNS2 = [
-  /\|.*wc\s+-l/i,
-  /wc\s+-l.*\|/i,
-  /cat\s+.*\|.*wc/i,
-  /grep\s+.*\|.*wc/i,
-  /echo\s+.*\|.*wc/i,
-  /ls\s+.*\|.*wc/i,
-  /wc\s+-l.*dist\//i,
-  /wc\s+-l.*src\//i,
-  /wc\s+-l.*build\//i,
-  /\|.*tee/i,
-  /\|.*>.*\./i,
-  /grep.*setCurrentAgent.*src/i,
-  /grep.*isSharkAgent.*src/i,
-  /grep.*guardian.*src/i
-];
-var FAKE_TEST_PATTERNS2 = [
-  /node\s+run-tests?\.js/i,
-  /node\s+verify.*\.mjs/i,
-  /npm\s+(run\s+)?test/i,
-  /yarn\s+(run\s+)?test/i,
-  /jest/i,
-  /vitest/i,
-  /mocha/i,
-  /jasmine/i,
-  /bun\s+test/i,
-  /pytest/i,
-  /python.*-m.*pytest/i,
-  /go\s+test/i,
-  /cargo\s+test/i,
-  /ruby\s+-Itest/i,
-  /rspec/i
-];
-var LEGITIMATE_PATTERNS2 = [
-  /mkdir\s+-p/i,
-  /cp\s+-r/i,
-  /mv\s+/i,
-  /cat\s+[^\|]+$/i,
-  /cat\s+[^\|]+\s*\|?\s*grep/i,
-  /head\s+-[0-9]+\s+/i,
-  /tail\s+-[0-9]+\s+/i,
-  /grep\s+-[rEn]+.*[^\|]$/i,
-  /grep\s+[^\|]+$/i,
-  /find\s+.*-name/i,
-  /test\s+-d/i,
-  /test\s+-x/i,
-  /ls\s+-[la]/i
-];
-var WRONG_CONTAINER_PATTERNS2 = [
-  /opencode\s+container\s+run/i,
-  /opencode\s+container\s+start/i,
-  /opencode\s+container\s+exec/i,
-  /opencode\s+run\s+/i
-];
-var SOURCE_INSPECTION_PATTERNS2 = [
-  /test\s+-f\s+\$\{?.*\}/i,
-  /test\s+-e\s+\$\{?.*\}/i,
-  /if\s+\[\s*-[fes]\s+.*\]\s*;/i,
-  /grep\s+-r\s+.*src\//i,
-  /ls\s+-l.*dist\//i
-];
-var HOST_FALLBACK_PATTERNS2 = [
-  /host.*testing.*already.*works/i,
-  /fall.*back.*to.*host/i,
-  /host.*already.*proves/i,
-  /local.*works.*container.*not.*needed/i,
-  /since.*host.*works/i,
-  /skip.*container.*test/i,
-  /container.*not.*necessary/i,
-  /container.*not.*needed/i,
-  /not.*need.*container/i,
-  /skip.*container/i,
-  /use.*host.*instead/i,
-  /host.*prove.*it.*works/i,
-  /already.*proven.*to.*work/i,
-  /already.*verified.*on.*host/i,
-  /already.*tested.*on.*local/i
-];
-var SUCCESS_CLAIM_PATTERNS2 = [
-  /it.*works.*trust.*me/i,
-  /trust.*me.*it.*works/i,
-  /believe.*me.*it.*works/i,
-  /already.*verified.*by.*myself/i,
-  /already.*tested.*and.*works/i,
-  /already.*proven.*to.*work/i,
-  /obviously.*correct/i,
-  /clearly.*works/i,
-  /self.*evidently.*correct/i,
-  /in.*my.*assessment.*it.*works/i,
-  /in.*my.*experience.*it.*works/i,
-  /based.*on.*my.*analysis.*works/i,
-  /no.*need.*for.*test/i,
-  /no.*need.*for.*verification/i,
-  /no.*further.*test.*needed/i
-];
-var MODEL_RESTRICTION_PATTERNS2 = [
-  /only.*gpt/i,
-  /only.*claude/i,
-  /only.*gemini/i,
-  /only.*llama/i,
-  /must.*use.*gpt/i,
-  /must.*use.*claude/i,
-  /restricted.*to.*model/i,
-  /model.*quota/i,
-  /model.*limit/i,
-  /rate.*limit.*excuse/i,
-  /api.*key.*issue/i,
-  /can't.*afford.*model/i,
-  /too.*expensive.*model/i,
-  /model.*cost.*too.*high/i,
-  /switch.*model.*\u7406\u7531/i
-];
-var MOCK_STUB_PATTERNS2 = [
-  /mock.*data/i,
-  /stub.*data/i,
-  /fake.*data/i,
-  /dummy.*data/i,
-  /sample.*data/i,
-  /test.*data.*only/i,
-  /mocked.*response/i,
-  /stubbed.*response/i,
-  /fake.*api/i,
-  /hardcoded.*response/i,
-  /static.*json.*instead/i,
-  /no.*real.*api/i
-];
-var SIMPLIFICATION_PATTERNS2 = [
-  /over.*simplif/i,
-  /overly.*simplif/i,
-  /too.*simpl/i,
-  /oversimplif/i,
-  /hand.*wave/i,
-  /handwave/i,
-  / gloss.*over /i,
-  /glossed.*over/i,
-  /skip.*detail/i,
-  /skip.*nuance/i,
-  /oversimplif/i
-];
-var CONFUSION_PRETENSE_PATTERNS2 = [
-  /it.*somewhat.*works/i,
-  /sorta.*works/i,
-  /kinda.*works/i,
-  /more.*or.*less/i,
-  / mostly .*works/i,
-  /approximately.*correct/i,
-  / basically .*correct/i,
-  / essentially .*works/i,
-  / nominally .*functional/i,
-  / partially .*implemented/i,
-  / partially .*working/i,
-  /somewhat.*correct/i
-];
-var SCOPE_CREEP_PATTERNS2 = [
-  /while.*at.*it/i,
-  /while.*we.*re.*at.*it/i,
-  /at.*the.*same.*time/i,
-  /also.*need.*to/i,
-  /might.*as.*well/i,
-  /\u987A\u4FBF/i,
-  /\u987A\u4FBF\u8BF4\u4E00\u4E0B/i,
-  /just.*to.*be.*thorough/i,
-  /for.*completeness/i,
-  /one.*more.*thing/i,
-  /oh.*and.*also/i,
-  /on.*the.*side/i
-];
-var UNDERMINING_PATTERNS2 = [
-  /not.*worth.*the.*effort/i,
-  /too.*much.*work/i,
-  /not.*worth.*it/i,
-  /diminishing.*returns/i,
-  / marginal .*benefit/i,
-  / minimal .*gain/i,
-  /savvy.*engineer.*would/i,
-  /experienced.*developer.*would/i,
-  /realistic.*timeline/i,
-  /realistically/i,
-  / practically .*impossible/i,
-  / realistically .*impractical/i
-];
-var IMPATIENCE_PATTERNS2 = [
-  /let's.*just.*move.*on/i,
-  /let's.*skip.*to.*the.*end/i,
-  /just.*ship.*it/i,
-  /good.*enough/i,
-  /close.*enough/i,
-  /ship.*it/i,
-  /just.*deploy/i,
-  /fuck.*it/i,
-  / ship .*now/i,
-  / deploy .*now/i,
-  /let's.*hurry/i
-];
-var SELF_REFERENCE_PATTERNS2 = [
-  /i.*have.*verified.*that/i,
-  /i.*verified.*it.*works/i,
-  /my.*verification.*shows/i,
-  /i.*tested.*it.*works/i,
-  /i.*ran.*it.*and.*works/i,
-  /my.*testing.*confirms/i,
-  /i.*know.*it.*works/i,
-  /i.*am.*certain.*it.*works/i,
-  /my.*assessment.*is/i,
-  /in.*my.*assessment/i,
-  /my.*analysis.*shows/i
-];
-function checkHostFallback(text) {
-  for (const pattern of HOST_FALLBACK_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.1] Host fallback detected. ` + `Host testing \u2260 container testing. Container isolation is REQUIRED for ship gate.`);
-    }
-  }
-}
-function checkSuccessClaim(text) {
-  for (const pattern of SUCCESS_CLAIM_PATTERNS2) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence2()) {
-        throw new Error(`[ANTI-DERAILMENT L5.2] Success claim without proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence (passRate >= 0.96). ` + `Run: opencode run "shark-test-runner" --agent shark`);
-      }
-    }
-  }
-}
-function checkImpatience(text) {
-  for (const pattern of IMPATIENCE_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.9] Impatience detected. ` + `Proper verification takes time. Do not skip required steps.`);
-    }
-  }
-}
-function checkFakeTestRunner2(text) {
-  for (const pattern of FAKE_TEST_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-SLOP L2] Fake test runner detected: "${text}". ` + `Tests must run via OpenCode hooks. Use: opencode run "shark-test-runner"`);
-    }
-  }
-}
-function checkSourceInspection2(text) {
-  for (const pattern of SOURCE_INSPECTION_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-SLOP L3] Source inspection detected: "${text}". ` + `File existence \u2260 runtime verification. Use actual execution.`);
-    }
-  }
-}
-function checkWrongContainer2(text) {
-  for (const pattern of WRONG_CONTAINER_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-SLOP L4] Wrong container command detected: "${text}". ` + `Use: opencode run "command" (not opencode container run)`);
-    }
-  }
-}
-function checkSelfReference(text) {
-  for (const pattern of SELF_REFERENCE_PATTERNS2) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence2()) {
-        throw new Error(`[ANTI-DERAILMENT L5.10] Self-reference claim without proof. ` + `Self-verification \u2260 mechanical proof. ` + `MECHANICAL PROOF REQUIRED: Container test evidence.`);
-      }
-    }
-  }
-}
-function checkModelRestriction(text) {
-  for (const pattern of MODEL_RESTRICTION_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.3] Model restriction excuse detected. ` + `Quality gates apply regardless of model choice.`);
-    }
-  }
-}
-function checkMockStub(text) {
-  for (const pattern of MOCK_STUB_PATTERNS2) {
-    if (pattern.test(text)) {
-      if (!hasContainerTestEvidence2()) {
-        throw new Error(`[ANTI-DERAILMENT L5.4] Mock/stub data detected. ` + `MECHANICAL PROOF REQUIRED: Container test evidence. ` + `Real data + real execution required for ship gate.`);
-      }
-    }
-  }
-}
-function checkSimplification(text) {
-  for (const pattern of SIMPLIFICATION_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.5] Oversimplification detected. ` + `Nuance matters. Do not hand-wave complex aspects.`);
-    }
-  }
-}
-function checkConfusionPretense(text) {
-  for (const pattern of CONFUSION_PRETENSE_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.6] Confusion pretense detected. ` + `If uncertain, admit it. "Somewhat works" is not an acceptable status.`);
-    }
-  }
-}
-function checkTheatricalVerificationCmd(text) {
-  for (const pattern of LEGITIMATE_PATTERNS2) {
-    if (pattern.test(text)) {
-      return;
-    }
-  }
-  for (const pattern of THEATRICAL_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-SLOP L1] Counting theater detected: "${text}". ` + `Verification requires running, not counting.`);
-    }
-  }
-}
-function checkScopeCreep(text) {
-  for (const pattern of SCOPE_CREEP_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.7] Scope creep detected. ` + `Stay on task. Use separate task for new items.`);
-    }
-  }
-}
-function checkUndermining(text) {
-  for (const pattern of UNDERMINING_PATTERNS2) {
-    if (pattern.test(text)) {
-      throw new Error(`[ANTI-DERAILMENT L5.8] Undermining detected. ` + `Quality gates exist for reason. Do not use "not worth it" excuses.`);
-    }
-  }
-}
-function checkMessageEnforcement(text) {
-  checkTheatricalVerificationCmd(text);
-  checkFakeTestRunner2(text);
-  checkSourceInspection2(text);
-  checkWrongContainer2(text);
-  checkHostFallback(text);
-  checkSuccessClaim(text);
-  checkModelRestriction(text);
-  checkMockStub(text);
-  checkSimplification(text);
-  checkConfusionPretense(text);
-  checkScopeCreep(text);
-  checkUndermining(text);
-  checkImpatience(text);
-  checkSelfReference(text);
-}
-function createCommandExecuteHook() {
-  return async (input, output) => {
-    const { command, arguments: args } = input;
-    if (!command) {
-      return;
-    }
-    if (command === "run" && args) {
-      const agentMatch = args.match(/--agent\s+(\S+)/);
-      const agentName = agentMatch ? agentMatch[1] : null;
-      if (agentName && isSharkAgent(agentName)) {
-        setCurrentAgent(agentName);
-        const agentIndex = args.indexOf("--agent");
-        const message = agentIndex > 0 ? args.substring(0, agentIndex).trim() : args;
-        if (message && message.length > 0) {
-          checkMessageEnforcement(message);
-        }
-      }
-    }
-  };
-}
-
-// src/hooks/v4.1/tool-summarizer-hook.ts
-var MAX_OUTPUT_LINES = 100;
-var MAX_LS_ENTRIES = 20;
-function createToolSummarizerHook() {
-  return async (input, output) => {
-    const tool6 = input.tool;
-    let outputStr = output.output || "";
-    if (tool6 === "Bash" || tool6 === "bash") {
-      if (outputStr.includes("grep") || outputStr.includes("rg ")) {
-        output.output = summarizeGrep(outputStr);
-      } else if (outputStr.includes("ls ") || outputStr.includes(`ls
-`)) {
-        output.output = summarizeLs(outputStr);
-      }
-    }
-    if (tool6 === "Read" || tool6 === "read") {
-      output.output = summarizeRead(outputStr);
-    }
-  };
-}
-function summarizeGrep(output) {
-  const lines = output.split(`
-`).filter((l) => l.trim());
-  const matchCount = lines.length;
-  const fileSet = new Set;
-  for (const line of lines) {
-    const colonIdx = line.indexOf(":");
-    if (colonIdx > 0) {
-      fileSet.add(line.substring(0, colonIdx));
-    }
-  }
-  return `grep found ${matchCount} matches across ${fileSet.size} files. Showing first 20:
-${lines.slice(0, 20).join(`
-`)}`;
-}
-function summarizeLs(output) {
-  const lines = output.split(`
-`).filter((l) => l.trim());
-  const total = lines.length;
-  if (total <= MAX_LS_ENTRIES) {
-    return output;
-  }
-  return `ls: ${total} entries. Showing first ${MAX_LS_ENTRIES}:
-${lines.slice(0, MAX_LS_ENTRIES).join(`
-`)}`;
-}
-function summarizeRead(output) {
-  const lines = output.split(`
+      return [
+        "\u2554\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2557",
+        "\u2551     FIREWALL STATUS                    \u2551",
+        "\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563",
+        `\u2551 Audit entries: ${String(entryCount).padEnd(22)}\u2551`,
+        `\u2551 Last block:    ${lastBlockTime.padEnd(22)}\u2551`,
+        "\u2560\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2563",
+        "\u2551 Enabled layers:                        \u2551",
+        ...ENABLED_LAYERS.map((l) => `\u2551  ${l.padEnd(36)}\u2551`),
+        "\u255A\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u2550\u255D"
+      ].join(`
 `);
-  if (lines.length <= MAX_OUTPUT_LINES) {
-    return output;
-  }
-  return `${lines.slice(0, MAX_OUTPUT_LINES).join(`
-`)}
-[... ${lines.length - MAX_OUTPUT_LINES} more lines truncated ...]`;
-}
-
-// src/hooks/v4.1/system-transform-hook.ts
-import * as fs8 from "fs";
-import * as path7 from "path";
-var CONTAINER_TEST_RESULT_FILE4 = "ContainerTestResult.json";
-var BUILD_CONTEXT_FILE = "build-context.md";
-var lastInjectedGate = null;
-var buildContextInjected = false;
-function resetSystemTransformState() {
-  lastInjectedGate = null;
-  buildContextInjected = false;
-}
-function createSystemTransformHook(gateManager, peerDispatch) {
-  return async (input, output) => {
-    const agentName = input.agent ?? output.agent;
-    if (!isSharkAgent(agentName)) {
-      return;
     }
-    const state = gateManager.getState();
-    const systemOutput = output;
-    if (!Array.isArray(systemOutput.system))
-      return;
-    if (!buildContextInjected) {
-      buildContextInjected = true;
-      const buildContext = loadBuildContext();
-      if (buildContext) {
-        systemOutput.system.unshift(buildContext);
-      }
-    }
-    if (state.currentGate !== lastInjectedGate) {
-      lastInjectedGate = state.currentGate;
-      const criteria = gateManager.getCriteria(state.currentGate);
-      const enforcementContext = `
-[SHARK ENFORCEMENT CONTEXT]
-Gate: ${state.currentGate.toUpperCase()}
-Iteration: ${state.currentIteration}
-Blocking Criteria:
-${criteria.blockingCriteria.map((c) => `  - ${c}`).join(`
-`)}
-Evidence Required:
-${criteria.evidenceRequired.map((e) => `  - ${e}`).join(`
-`)}
-IRONCLAD RULE: Source file edits require DUPLICATE workflow:
-1. cp {file} {file}.v1.0.0
-2. edit {file}.v1.0.0
-3. Verify changes
-4. Optional: Replace original
-CRITICAL: Before editing MAJOR CODEBASE files (agent harnesses, OS, core infrastructure), you MUST:
-1. Use the question tool to ask user for explicit confirmation
-2. Explain what changes you intend to make
-3. Wait for user approval before proceeding
-`.trim();
-      systemOutput.system.push(enforcementContext);
-      if (state.currentGate === "delivery") {
-        const testEvidencePath = path7.join(process.cwd(), ".shark", "evidence", "delivery", CONTAINER_TEST_RESULT_FILE4);
-        let testStatus = "NOT_RUN";
-        let testPassed = false;
-        if (fs8.existsSync(testEvidencePath)) {
-          try {
-            const testResult = JSON.parse(fs8.readFileSync(testEvidencePath, "utf-8"));
-            testStatus = testResult.overallPassed ? "PASSED" : "FAILED";
-            testPassed = testResult.overallPassed;
-          } catch {
-            testStatus = "ERROR_READING";
-          }
-        }
-        const deliveryWarning = `
-[SHARK DELIVERY GATE WARNING]
-Container tests are MANDATORY for delivery. You CANNOT ship, commit, release, or deploy without passing container tests.
-Current Container Test Status: ${testStatus}
-REQUIRED ACTION:
-  1. Run: shark-test-runner action=run
-  2. Wait for all tests to pass
-  3. DO NOT attempt any delivery actions until tests pass
-`.trim();
-        systemOutput.system.push(deliveryWarning);
-        if (!testPassed && testStatus !== "NOT_RUN") {
-          systemOutput.system.push(`[SHARK HARD BLOCK] Tests FAILED. You MUST fix the failing tests before delivery.`);
-        } else if (testStatus === "NOT_RUN") {
-          systemOutput.system.push(`[SHARK HARD BLOCK] No container test evidence found. You MUST run: shark-test-runner action=run`);
-        }
-      }
-    }
-    if (peerDispatch && state.currentGate === "plan" && state.currentIteration === "V1.0") {
-      const pState = peerDispatch.getState();
-      const brainContext = `
-[SHARK BRAIN CONTEXT]
-Active Brains: ${pState.activeBrains.join(", ")}
-Primary Brain: ${pState.primaryBrain}
-Brain coordination is MECHANICAL.
-`.trim();
-      systemOutput.system.push(brainContext);
-    }
-  };
-}
-function loadBuildContext() {
-  try {
-    const primaryPath = path7.join(process.cwd(), ".shark", "auto-inject", "BUILD_CONTEXT.md");
-    if (fs8.existsSync(primaryPath)) {
-      return fs8.readFileSync(primaryPath, "utf-8");
-    }
-    const legacyPath = path7.join(process.cwd(), ".shark", BUILD_CONTEXT_FILE);
-    if (fs8.existsSync(legacyPath)) {
-      return fs8.readFileSync(legacyPath, "utf-8");
-    }
-  } catch (err) {}
-  return null;
-}
-
-// src/hooks/v4.1/session-hook.ts
-import * as path8 from "path";
-import * as fs9 from "fs";
-var BUILD_CONTEXT_FILE2 = "build-context.md";
-var BUILD_REMINDER_FILE = "build-reminder.txt";
-var dirCreationAttempted = false;
-var contextInjectedThisSession = false;
-function createSessionHook(gateManager, _evidenceCollector, peerDispatch, stateStore, messenger) {
-  return async (input) => {
-    const event = input.event;
-    if (!event?.type)
-      return;
-    if (!isSharkAgent(event.agent)) {
-      setCurrentAgent(undefined, event.sessionId);
-      return;
-    }
-    setCurrentAgent(event.agent, event.sessionId);
-    switch (event.type) {
-      case "session.created":
-        handleSessionCreated(gateManager, peerDispatch);
-        injectBuildContext();
-        break;
-      case "session.ended":
-        handleSessionEnded(stateStore, messenger);
-        contextInjectedThisSession = false;
-        break;
-    }
-  };
-}
-function injectBuildContext() {
-  if (contextInjectedThisSession)
-    return;
-  contextInjectedThisSession = true;
-  try {
-    const sharkDir = path8.join(process.cwd(), ".shark");
-    const contextPath = path8.join(sharkDir, BUILD_CONTEXT_FILE2);
-    if (fs9.existsSync(contextPath)) {
-      const context = fs9.readFileSync(contextPath, "utf-8");
-      const reminderPath = path8.join(sharkDir, BUILD_REMINDER_FILE);
-      const reminder = fs9.existsSync(reminderPath) ? fs9.readFileSync(reminderPath, "utf-8") : "L1-L4 broken. L5 working.";
-    }
-  } catch (err) {}
-}
-function handleSessionCreated(gateManager, peerDispatch) {
-  gateManager.restore({
-    currentGate: "plan",
-    gateStatus: {
-      plan: "pending",
-      build: "pending",
-      test: "pending",
-      verify: "pending",
-      audit: "pending",
-      delivery: "pending"
-    },
-    verifyAttempts: 0,
-    currentIteration: "V1.0",
-    iterationAttempts: {}
   });
-  if (peerDispatch) {
-    peerDispatch.initialize();
-  }
-  if (!dirCreationAttempted) {
-    dirCreationAttempted = true;
-    const sharkDir = path8.join(process.cwd(), ".shark");
-    fs9.mkdirSync(sharkDir, { recursive: true });
-    fs9.mkdirSync(path8.join(sharkDir, "evidence"), { recursive: true });
-    fs9.mkdirSync(path8.join(sharkDir, "checkpoints"), { recursive: true });
-  }
-}
-function handleSessionEnded(stateStore, messenger) {
-  stateStore.cleanup();
-  messenger.cleanup();
-  dirCreationAttempted = false;
-  resetSystemTransformState();
-  resetGateHookState();
-  setCurrentAgent(undefined);
-  clearCurrentAgent();
 }
 
-// src/hooks/v4.1/compacting-hook.ts
-import * as fs10 from "fs";
-import * as path9 from "path";
-var BUILD_CONTEXT_FILE3 = "build-context.md";
-function generateBuildContext(gateManager) {
-  const currentGate = gateManager.getCurrentGate();
-  const iteration = gateManager.getCurrentIteration();
-  const gateState = gateManager.getState();
-  return `# SHARK AGENT v4.8.3 BUILD CONTEXT
-
-## STATUS: ${currentGate.toUpperCase()}
-
-### Current State
-- Gate: ${currentGate}
-- Iteration: ${iteration}
-- Verify Attempts: ${gateState.verifyAttempts}/3
-
-### Gate Status
-${Object.entries(gateState.gateStatus).map(([gate, status]) => `- ${gate}: ${status}`).join(`
-`)}
-
----
-Generated: ${new Date().toISOString()}
-`.trim();
-}
-function createCompactingHook(gateManager) {
-  return async (input) => {
-    const sessionId = input.sessionID;
-    if (!sessionId)
-      return;
-    try {
-      const sharkDir = path9.join(process.cwd(), ".shark");
-      const autoInjectDir = path9.join(sharkDir, "auto-inject");
-      if (!fs10.existsSync(sharkDir)) {
-        fs10.mkdirSync(sharkDir, { recursive: true });
-      }
-      if (!fs10.existsSync(autoInjectDir)) {
-        fs10.mkdirSync(autoInjectDir, { recursive: true });
-      }
-      const context = generateBuildContext(gateManager);
-      const primaryPath = path9.join(autoInjectDir, "BUILD_CONTEXT.md");
-      fs10.writeFileSync(primaryPath, context, "utf-8");
-      const legacyPath = path9.join(sharkDir, BUILD_CONTEXT_FILE3);
-      fs10.writeFileSync(legacyPath, context, "utf-8");
-      const reminderPath = path9.join(sharkDir, "build-reminder.txt");
-      fs10.writeFileSync(reminderPath, `Status: ${gateManager.getCurrentGate()} | Iteration: ${gateManager.getCurrentIteration()}`, "utf-8");
-    } catch (err) {}
-  };
-}
-
-// src/hooks/v4.1/index.ts
-function createSharkHooks(guardian, gateManager, evidenceCollector, peerDispatch, stateStore, messenger) {
-  return {
-    event: createSessionHook(gateManager, evidenceCollector, peerDispatch, stateStore, messenger),
-    "chat.message": createChatMessageHook(),
-    "command.execute.before": createCommandExecuteHook(),
-    "experimental.chat.messages.transform": createMessagesTransformHook(),
-    "tool.execute.before": createGuardianHook(guardian),
-    "tool.execute.after": (input, output) => {
-      createToolSummarizerHook()(input, output);
-      createGateHook(gateManager, evidenceCollector, peerDispatch)(input, output);
+// src/tools/firewall-audit-tool.ts
+import { tool as tool7 } from "@opencode-ai/plugin";
+function createFirewallAuditTool() {
+  return tool7({
+    description: "View the last N firewall audit log entries",
+    args: {
+      limit: exports_external.number().int().min(1).max(100).default(20).describe("Number of entries to return")
     },
-    "experimental.session.compacting": createCompactingHook(gateManager),
-    "experimental.chat.system.transform": createSystemTransformHook(gateManager, peerDispatch)
-  };
+    async execute(args) {
+      const auditLogger = new FirewallAudit(process.cwd());
+      const all = auditLogger.getEntries();
+      const limit = Math.max(1, args.limit ?? 20);
+      const recent = all.slice(-limit).reverse();
+      if (recent.length === 0) {
+        return "No firewall audit entries recorded.";
+      }
+      const lines = [
+        `FIREWALL AUDIT LOG (last ${recent.length} of ${all.length} entries)`,
+        "\u2550".repeat(80)
+      ];
+      for (const entry of recent) {
+        lines.push(`[${entry.timestamp}] ${entry.layer} | ${entry.reason} | agent=${entry.agent} tool=${entry.tool}`);
+        if (entry.command) {
+          lines.push(`  command: ${entry.command}`);
+        }
+        lines.push(`  correction: ${entry.correction}`);
+        lines.push("\u2500".repeat(80));
+      }
+      return lines.join(`
+`);
+    }
+  });
 }
 
 // src/index.ts
@@ -16340,27 +18888,19 @@ async function SharkAgent(input) {
   const stateStore = createStateStore();
   const messenger = createSharkMessenger();
   const guardian = new Guardian({ level: "SANDBOX" });
-  const gm = new GateManager(path10.join(workspacePath, ".shark"));
-  const ec = new EvidenceCollector(path10.join(workspacePath, ".shark"));
-  const peerDispatch = new SharkPeerDispatch({
-    stateStore,
-    messenger,
-    gateManager: gm
-  });
-  const statusTool = createSharkStatusTool(stateStore, gm);
-  const gateTool = createSharkGateTool(gm, guardian);
-  const evidenceTool = createSharkEvidenceTool(ec);
-  const checkpointTool = createCheckpointTool(stateStore, gm);
-  const testRunnerTool = createSharkTestRunnerTool();
-  const hooks = createSharkHooks(guardian, gm, ec, peerDispatch, stateStore, messenger);
+  const gm = new GateManager(path13.join(workspacePath, ".shark"));
+  const ec = new EvidenceCollector(path13.join(workspacePath, ".shark"));
+  const hooks = createSharkHooks(guardian, gm, ec, stateStore, messenger);
   return {
     ...hooks,
     tool: {
-      "shark-status": statusTool,
-      "shark-gate": gateTool,
-      "shark-evidence": evidenceTool,
-      "shark-test-runner": testRunnerTool,
-      checkpoint: checkpointTool
+      "shark-status": createSharkStatusTool(stateStore, gm),
+      "shark-gate": createSharkGateTool(gm, guardian),
+      "shark-evidence": createSharkEvidenceTool(ec),
+      "shark-test-runner": createSharkTestRunnerTool(),
+      checkpoint: createCheckpointTool(stateStore, gm),
+      "firewall-status": createFirewallStatusTool(),
+      "firewall-audit": createFirewallAuditTool()
     },
     config: async (cfg) => {
       if (!cfg.agent)
@@ -16368,18 +18908,18 @@ async function SharkAgent(input) {
       Object.assign(cfg.agent, {
         shark: {
           name: "shark",
-          description: "SHARK \u2014 Execution Brain with triple-brain coordination",
-          prompt: EXECUTION_BRAIN_T1,
-          instructions: EXECUTION_BRAIN_T1,
+          description: "SHARK \u2014 Linear Execution Agent with Triple-Brain structure",
           mode: "primary",
-          permission: { task: "allow" },
+          permission: { task: "allow", tool: "allow" },
           color: sharkColor,
           tools: {
             "shark-status": true,
             "shark-gate": true,
             "shark-evidence": true,
             "shark-test-runner": true,
-            checkpoint: true
+            checkpoint: true,
+            "firewall-status": true,
+            "firewall-audit": true
           }
         }
       });

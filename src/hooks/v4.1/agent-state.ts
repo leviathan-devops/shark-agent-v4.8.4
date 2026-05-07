@@ -11,6 +11,7 @@
 interface AgentState {
   agent: string | undefined;
   timestamp: number;
+  slopScore: number;
 }
 
 const DEFAULT_SESSION = 'default';
@@ -28,9 +29,11 @@ function cleanupStaleSessions(): void {
 
 export function setCurrentAgent(agent: string | undefined, sessionId?: string): void {
   const sid = sessionId || DEFAULT_SESSION;
+  const currentState = agentBySession.get(sid);
   agentBySession.set(sid, {
     agent,
-    timestamp: Date.now()
+    timestamp: Date.now(),
+    slopScore: currentState?.slopScore || 0,
   });
 }
 
@@ -39,6 +42,21 @@ export function getCurrentAgent(sessionId?: string): string | undefined {
   const sid = sessionId || DEFAULT_SESSION;
   const state = agentBySession.get(sid);
   return state?.agent;
+}
+
+export function getSlopScore(sessionId?: string): number {
+  const sid = sessionId || DEFAULT_SESSION;
+  return agentBySession.get(sid)?.slopScore || 0;
+}
+
+export function incrementSlopScore(sessionId?: string, amount: number = 1): number {
+  const sid = sessionId || DEFAULT_SESSION;
+  const state = agentBySession.get(sid);
+  if (!state) return 0;
+  
+  const newScore = state.slopScore + amount;
+  agentBySession.set(sid, { ...state, slopScore: newScore });
+  return newScore;
 }
 
 export function clearCurrentAgent(sessionId?: string): void {

@@ -1,44 +1,67 @@
 /**
- * Firewall Patterns — v4.8.3 Checkpoint 4.1
+ * Firewall Patterns — v4.8.4 Contextual Intelligence
  * 
  * SINGLE SOURCE OF TRUTH. All hooks import from here.
- * Eliminates 4-way pattern duplication that caused inconsistent blocking.
+ * This version implements Contextual Precision to avoid false positives.
  */
-export const THEATRICAL_PATTERNS = [
-  /\|.*wc\s+-l/i, /wc\s+-l.*\|/i, /cat.*\|.*wc/i, /grep.*\|.*wc/i,
-  /echo.*\|.*wc/i, /ls.*\|.*wc/i, /find.*\|.*wc/i, /\|.*tee/i,
-  /\|.*>.*\./i, /wc\s+-l.*dist\//i, /wc\s+-l.*src\//i, /wc\s+-l.*build\//i,
-  /\bwc\b.*\.(dist|src|build)/i, /wc\s*</,
-  /grep.*setCurrentAgent.*src/i, /grep.*isSharkAgent.*src/i, /grep.*guardian.*src/i,
+
+export type Gate = 'plan' | 'build' | 'test' | 'verify' | 'audit' | 'delivery';
+
+export interface ContextualPattern {
+  label: string;
+  pattern: RegExp;
+  forbiddenIn: Gate[];
+  allowedIn: Gate[];
+  description: string;
+}
+
+export const CONTEXTUAL_FIREWALL_RULES: ContextualPattern[] = [
+  {
+    label: 'Theatrical Counting',
+    pattern: /\|.*wc\s+-l/i,
+    forbiddenIn: ['test', 'verify', 'audit', 'delivery'],
+    allowedIn: ['plan', 'build'],
+    description: 'Counting lines is theatrical during verification but legitimate during planning.'
+  },
+  {
+    label: 'Fake Test Runner',
+    pattern: /npm\s+(run\s+)?test|jest|vitest|mocha|jasmine/i,
+    forbiddenIn: ['test', 'verify', 'audit', 'delivery'],
+    allowedIn: ['plan', 'build'],
+    description: 'Standard test runners are blocked during verification to force the use of the authenticated shark-test-runner.'
+  },
+  {
+    label: 'Source Inspection',
+    pattern: /test\s+-[fed]\s+.*|ls\s+-l.*(dist|src|build)\//i,
+    forbiddenIn: ['verify', 'audit', 'delivery'],
+    allowedIn: ['plan', 'build', 'test'],
+    description: 'Checking for file existence is a proxy for success and is banned in the final gates.'
+  },
+  {
+    label: 'Wrong Container',
+    pattern: /opencode\s+container\s+(run|start|exec)/i,
+    forbiddenIn: ['plan', 'build', 'test', 'verify', 'audit', 'delivery'],
+    allowedIn: [],
+    description: 'Direct container manipulation is always forbidden.'
+  },
 ];
 
-export const LEGITIMATE_PATTERNS = [
-  /mkdir\s+-p/i, /cp\s+-r/i, /mv\s+/i, /cat\s+[^\|]+$/i,
-  /head\s+-[0-9]+\s+/i, /tail\s+-[0-9]+\s+/i, /grep\s+-[rEn]+.*[^\|]$/i,
-  /find\s+.*-name/i, /test\s+-d/i, /test\s+-x/i,
-];
-
-export const FAKE_TEST_PATTERNS = [
-  /node\s+run-tests?\.js/i, /node\s+verify.*\.mjs/i, /node\s+test/i,
-  /npm\s+(run\s+)?test/i, /npm\s+exec\s+test/i, /yarn\s+(run\s+)?test/i,
-  /bun\s+test/i, /bunx\s+test/i, /pnpm\s+test/i,
-  /jest/i, /vitest/i, /mocha/i, /jasmine/i,
-  /pytest/i, /python.*-m.*pytest/i,
-  /go\s+test/i, /cargo\s+test/i, /ruby\s+-Itest/i, /rspec/i,
-];
-
-export const SOURCE_INSPECTION_PATTERNS = [
-  /test\s+-[fe]\s+\$\{?.*\}/i,
-  /test\s+-d\s+\$\{?.*\}/i,
-  /if\s+\[\s*-[fes]\s+.*\]\s*;/i,
-  /\[\s*-[fe]\s+\$\{?.*\}/i,
-  /stat\s+/i,
-];
-
-export const WRONG_CONTAINER_PATTERNS = [
-  /opencode\s+container\s+run/i, /opencode\s+container\s+start/i,
-  /opencode\s+container\s+exec/i, /opencode\s+container\s+sh/i,
-  /opencode\s+run\s+/i, /docker\s+run.*opencode/i,
+export const BEHAVIORAL_PATTERNS: Array<{ label: string; pattern: RegExp; requireEvidence?: boolean }> = [
+  { label: 'Confused avoidance', pattern: /i('?m| am) confused about (the )?(goal|task|purpose|direction)/i },
+  { label: 'Already works claim', pattern: /(host|local).*(already|proves).*(works|correct)/i },
+  { label: 'Simplify excuse', pattern: /(maybe|perhaps).*simplif/i },
+  { label: 'Goal reset', pattern: /what was the (user.?s |original )?goal/i },
+  { label: 'Basic solution shortcut', pattern: /(just|simply) use .*(instead|rather)/i },
+  { label: 'Self-assessment claim', pattern: /in my (assessment|experience|analysis)/i, requireEvidence: true },
+  { label: 'Scope expansion', pattern: /(while|whilst).*(at it|we.?re at it|also)|should also (fix|add|do)/i },
+  { label: 'False fix claim', pattern: /(should be |is )?fixed now|should (be |)working now/i },
+  { label: 'Superficial check', pattern: /let me (just )?(check|verify|confirm) (real )?quick/i },
+  { label: 'Trust me deflection', pattern: /trust me|i promise|believe me|it.?ll be fine/i, requireEvidence: true },
+  { label: 'Task avoidance', pattern: /(maybe|perhaps|let.?s).*(come back|revisit|later|another time)/i },
+  { label: 'Overthinking stall', pattern: / (hmm|um|uh).*(thinking|wonder|ponder)/i },
+  { label: 'Derail: reading sensitive', pattern: /read(ing)? .*(ssh|key|credential|secret|token|passwd|shadow|\.env|auth)/i },
+  { label: 'Derail: exploring system', pattern: /let me (explore|check|look at|see).*(system|root|other|different|whole)/i },
+  { label: 'Derail: data exfil', pattern: /(dump|print|output|show) (full|entire|all|complete).*(key|secret|credential|config)/i },
 ];
 
 export const HOST_FALLBACK_PATTERNS = [
@@ -53,13 +76,19 @@ export const HOST_FALLBACK_PATTERNS = [
 ];
 
 export const SUCCESS_CLAIM_PATTERNS = [
-  /it.*works.*trust.*me/i, /trust.*me.*it.*works/i,
-  /believe.*me.*it.*works/i, /already.*verified.*by.*myself/i,
-  /already.*tested.*and.*works/i, /obviously.*correct/i,
-  /clearly.*works/i, /self.*evidently.*correct/i,
-  /in.*my.*assessment.*it.*works/i, /in.*my.*experience.*it.*works/i,
-  /based.*on.*my.*analysis.*works/i, /no.*need.*for.*test/i,
-  /no.*need.*for.*verification/i, /no.*further.*test.*needed/i,
+  /it.*works.*trust.*me/i, /trust.*me.*it.*works/i, /believe.*me.*it.*works/i,
+  /already.*verified.*by.*myself/i, /already.*tested.*and.*works/i, /already.*proven.*to.*work/i,
+  /obviously.*correct/i, /clearly.*works/i, /self.*evidently.*correct/i,
+  /in.*my.*assessment.*it.*works/i, /in.*my.*experience.*it.*works/i, /based.*on.*my.*analysis.*works/i,
+  /no.*need.*for.*test/i, /no.*need.*for.*verification/i, /no.*further.*test.*needed/i,
+];
+
+export const LAUNDERING_PATTERNS = [
+  /summary of results/i, /pass rate/i, /completed \d+ tests/i, /total tests: \d+/i,
+  /raw logs are omitted/i, /results summarized below/i, /summarizing the results/i,
+  /here is the summary/i, /here'?s? a summary/i, /updated the todo list/i,
+  /here is the results/i, /tests.*passed.*\d+\/\d+/i, /summary:.*\d+.*passed/i,
+  /keep the chat clean/i, /chat clean/i,
 ];
 
 export const MODEL_RESTRICTION_PATTERNS = [
@@ -100,7 +129,6 @@ export const SCOPE_CREEP_PATTERNS = [
 export const CROSS_AGENT_TOOLS = new Set([
   'hermes_remember', 'hermes_recall', 'hermes_context',
   'hive_remember', 'hive_context', 'hive_status',
-  'kraken_hive_remember', 'kraken_hive_search', 'kraken_hive_get_cluster_context',
   'memremember', 'memsearch', 'memread', 'membrowse', 'memcommit',
   'knowledge_remember', 'knowledge_recall', 'knowledge_query',
 ]);
@@ -108,7 +136,7 @@ export const CROSS_AGENT_TOOLS = new Set([
 export const CROSS_AGENT_PATTERNS = [
   /hermes_remember/i, /hermes_recall/i, /hermes_context/i,
   /hive_remember/i, /hive_context/i, /hive_status/i, /hive_mind/i,
-  /kraken_hive/i, /memremember/i, /memsearch/i, /memread/i, /membrowse/i,
+  /memremember/i, /memsearch/i, /memread/i, /membrowse/i,
   /knowledge_remember/i, /knowledge_recall/i, /knowledge_query/i,
 ];
 
@@ -145,30 +173,6 @@ export const DANGEROUS_TOOLS = new Set([
 
 export const CONTAINER_TEST_RESULT_FILE = 'ContainerTestResult.json';
 
-// ============================================================================
-// L8: BEHAVIORAL INTELLIGENCE SIGNATURES
-// ============================================================================
-export const BEHAVIORAL_PATTERNS: Array<{ label: string; pattern: RegExp; requireEvidence?: boolean }> = [
-  { label: 'Confused avoidance', pattern: /i('?m| am) confused about (the )?(goal|task|purpose|direction)/i },
-  { label: 'Already works claim', pattern: /(host|local).*(already|proves).*(works|correct)/i },
-  { label: 'Simplify excuse', pattern: /(maybe|perhaps).*simplif/i },
-  { label: 'Goal reset', pattern: /what was the (user.?s |original )?goal/i },
-  { label: 'Basic solution shortcut', pattern: /(just|simply) use .*(instead|rather)/i },
-  { label: 'Self-assessment claim', pattern: /in my (assessment|experience|analysis)/i, requireEvidence: true },
-  { label: 'Scope expansion', pattern: /(while|whilst).*(at it|we.?re at it|also)|should also (fix|add|do)/i },
-  { label: 'False fix claim', pattern: /(should be |is )?fixed now|should (be |)working now/i },
-  { label: 'Superficial check', pattern: /let me (just )?(check|verify|confirm) (real )?quick/i },
-  { label: 'Trust me deflection', pattern: /trust me|i promise|believe me|it.?ll be fine/i, requireEvidence: true },
-  { label: 'Task avoidance', pattern: /(maybe|perhaps|let.?s).*(come back|revisit|later|another time)/i },
-  { label: 'Overthinking stall', pattern: /(hmm|um|uh).*(thinking|wonder|ponder)/i },
-  { label: 'Derail: reading sensitive', pattern: /read(ing)? .*(ssh|key|credential|secret|token|passwd|shadow|\.env|auth)/i },
-  { label: 'Derail: exploring system', pattern: /let me (explore|check|look at|see).*(system|root|other|different|whole)/i },
-  { label: 'Derail: data exfil', pattern: /(dump|print|output|show) (full|entire|all|complete).*(key|secret|credential|config)/i },
-];
-
-// ============================================================================
-// L7: VERIFICATION GATE PATTERNS — agent must not claim verification without proof
-// ============================================================================
 export const VERIFICATION_PATTERNS = [
   /verified( by|\.| and|$)/i,
   /confirmed working/i,

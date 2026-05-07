@@ -1,6 +1,6 @@
 {
   "name": "shark-agent",
-  "version": "4.8.3",
+  "version": "4.8.4",
   "description": "SHARK Agent v4.8.3 - Triple-brain execution with mechanical gate enforcement. Execution Brain for autonomous BUILD + TEST operations.",
   "type": "module",
   "main": "dist/index.js",
